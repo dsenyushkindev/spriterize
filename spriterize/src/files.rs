@@ -72,7 +72,7 @@ pub struct RecentFiles {
 
 impl RecentFiles {
     pub fn load() -> Self {
-        let Some(config) = config_path() else {
+        let Some(config) = config_path(RECENT_FILE_NAME) else {
             return Self::default();
         };
         let Ok(text) = std::fs::read_to_string(config) else {
@@ -114,7 +114,7 @@ impl RecentFiles {
     }
 
     fn save(&self) {
-        let Some(config) = config_path() else {
+        let Some(config) = config_path(RECENT_FILE_NAME) else {
             return;
         };
 
@@ -132,10 +132,10 @@ impl RecentFiles {
     }
 }
 
-/// `%APPDATA%\spriterize\recent.txt` on Windows, and
-/// `$XDG_CONFIG_HOME/spriterize/recent.txt` (falling back to `~/.config`)
+/// Path of a config file: `%APPDATA%\spriterize\<name>` on Windows, and
+/// `$XDG_CONFIG_HOME/spriterize/<name>` (falling back to `~/.config`)
 /// elsewhere.
-fn config_path() -> Option<PathBuf> {
+pub fn config_path(file_name: &str) -> Option<PathBuf> {
     let dir = if cfg!(target_os = "windows") {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -144,7 +144,7 @@ fn config_path() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
     }?;
 
-    Some(dir.join(APP_DIR).join(RECENT_FILE_NAME))
+    Some(dir.join(APP_DIR).join(file_name))
 }
 
 #[cfg(test)]

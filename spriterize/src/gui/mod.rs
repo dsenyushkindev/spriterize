@@ -1,3 +1,4 @@
+use crate::settings::Settings;
 use crate::{Effect, UiEvent, UiState};
 use lapix::{Position, Size, Tool};
 use macroquad::prelude::*;
@@ -7,6 +8,7 @@ mod layers;
 mod menu;
 mod palette;
 mod preview;
+mod settings;
 mod status;
 mod toolbar;
 
@@ -14,6 +16,7 @@ use layers::LayersPanel;
 use menu::MenuBar;
 use palette::Palette;
 use preview::Preview;
+use settings::SettingsWindow;
 use status::StatusBar;
 use toolbar::Toolbar;
 
@@ -38,6 +41,10 @@ pub struct GuiSyncParams {
     pub recent_files: Vec<PathBuf>,
     pub current_file: Option<PathBuf>,
     pub new_project_requested: bool,
+    pub settings: Settings,
+    /// Framebuffer pixels per interface point, applied to egui each frame.
+    pub ui_scale: f32,
+    pub dpi_scale: f32,
 }
 
 pub struct Gui {
@@ -47,8 +54,13 @@ pub struct Gui {
     palette: Palette,
     status_bar: StatusBar,
     menu: MenuBar,
+    settings_window: SettingsWindow,
     mouse_on_canvas: bool,
     selected_tool: Tool,
+    /// Whether egui has an animation in flight (hover fades, tooltips, the text
+    /// cursor) and needs another frame to finish it.
+    wants_repaint: bool,
+    ui_scale: f32,
 }
 
 impl Gui {
@@ -60,9 +72,20 @@ impl Gui {
             palette: Palette::new(),
             status_bar: StatusBar::new(),
             menu: MenuBar::new(),
+            settings_window: SettingsWindow::new(),
             mouse_on_canvas: false,
             selected_tool: Tool::Brush,
+            wants_repaint: false,
+            ui_scale: 1.,
         }
+    }
+
+    pub fn wants_repaint(&self) -> bool {
+        self.wants_repaint
+    }
+
+    pub fn open_settings(&mut self) {
+        self.settings_window.open();
     }
 
     pub fn sync(&mut self, params: GuiSyncParams) {
@@ -81,6 +104,9 @@ impl Gui {
             params.layers_vis.clone(),
             params.layers_alpha.clone(),
         );
+        self.ui_scale = params.ui_scale;
+        self.settings_window
+            .sync(params.settings.clone(), params.dpi_scale);
         self.palette.sync(params.palette.clone(), params.main_color);
         self.menu.sync(
             params.canvas_size,
@@ -97,6 +123,10 @@ impl Gui {
         let mut events = Vec::new();
 
         egui_macroquad::ui(|egui_ctx| {
+            // Has to be set every frame: egui-miniquad 0.16 computes the
+            // display's scaling but never hands it to egui, which otherwise
+            // lays the whole interface out as though the screen were unscaled.
+            egui_ctx.set_pixels_per_point(self.ui_scale);
             crate::theme::apply_egui_visuals(egui_ctx);
 
             let mut palette_events = self.palette.update(egui_ctx);
@@ -114,12 +144,17 @@ impl Gui {
             self.preview.update(egui_ctx);
             self.status_bar.update(egui_ctx);
 
+            let mut settings_events = self.settings_window.update(egui_ctx);
+            events.append(&mut settings_events);
+
             let mut canvas_panel_events = self.update_canvas_panel(egui_ctx);
             events.append(&mut canvas_panel_events);
 
             if self.mouse_on_canvas {
                 egui_ctx.output_mut(|o| o.cursor_icon = egui::CursorIcon::None);
             }
+
+            self.wants_repaint = egui_ctx.has_requested_repaint();
         });
 
         events

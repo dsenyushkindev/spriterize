@@ -166,8 +166,16 @@ impl MenuBar {
                         events.push(Effect::UiEvent(UiEvent::SetZoom100));
                         ui.close_menu();
                     }
-                    if ui.button("Toggle pixel grid").clicked() {
+                    if ui
+                        .add(egui::Button::new("Toggle pixel grid").shortcut_text("Ctrl+G"))
+                        .clicked()
+                    {
                         events.push(Effect::UiEvent(UiEvent::ToggleGrid));
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Settings…").clicked() {
+                        events.push(Effect::UiEvent(UiEvent::OpenSettings));
                         ui.close_menu();
                     }
                 });

@@ -6,6 +6,7 @@ use crate::input::manager::InputManager;
 use crate::mouse::{CursorType, MouseManager};
 use crate::files::{self, RecentFiles};
 use crate::project;
+use crate::settings::{Settings, MAX_UI_SCALE, MIN_UI_SCALE};
 use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
 use std::path::PathBuf;
@@ -38,12 +39,10 @@ fn screen_size() -> Size<f32> {
         .into()
 }
 
-/// Ratio of framebuffer pixels (what macroquad draws in) to the logical points
-/// egui lays its widgets out in. This is 1.0 unless we're on a HiDPI display,
-/// where the two coordinate spaces come apart because of `high_dpi: true`.
+/// Scaling the display itself asks for. 1.0 unless we're on a HiDPI screen,
+/// where the framebuffer macroquad draws into is larger than the window's
+/// logical size because of `high_dpi: true`.
 fn dpi_scale() -> f32 {
-    // Only reads the global context macroquad has already initialized by the
-    // time any of this runs.
     macroquad::window::screen_dpi_scale()
 }
 
@@ -76,6 +75,8 @@ pub enum UiEvent {
     ZoomAdd(f32),
     ZoomMul(f32),
     ToggleGrid,
+    SetUiScale(f32),
+    OpenSettings,
     MoveCamera(Direction),
     MoveCameraExact(Point<i32>),
     MouseOverGui,
@@ -146,6 +147,9 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             recent_files: state.recent.paths().to_vec(),
             current_file: state.current_file.clone(),
             new_project_requested: state.new_project_requested,
+            settings: state.settings.clone(),
+            ui_scale: state.ui_scale(),
+            dpi_scale: dpi_scale(),
         }
     }
 }
@@ -156,7 +160,7 @@ pub struct UiState {
     camera: Position<f32>,
     canvas_pos: Position<f32>,
     zoom: f32,
-    show_grid: bool,
+    settings: Settings,
     /// Screen size as of the last time the canvas was centered. Starts at zero
     /// so that the first frame always centers.
     last_screen_size: Size<f32>,
@@ -204,7 +208,7 @@ impl Default for UiState {
             // of the drawing area is known.
             canvas_pos: Position::ZERO_F32,
             zoom: DEFAULT_ZOOM_LEVEL,
-            show_grid: true,
+            settings: Settings::load(),
             last_screen_size: Size::ZERO_F32,
             layer_textures: vec![drawing],
             input,
@@ -248,6 +252,7 @@ impl UiState {
 
         self.mouse_over_gui = false;
         self.sync_screen_size();
+        self.handle_dropped_files()?;
 
         self.gui.sync((&*self).into());
         // The menu has now seen the request and raised its confirmation window,
@@ -291,7 +296,7 @@ impl UiState {
         // `LEFT_TOOLBAR_W` is a width in egui's points, but the canvas is drawn
         // in framebuffer pixels, so it has to be converted before the two can be
         // used in the same calculation.
-        let toolbar = LEFT_TOOLBAR_W as f32 * dpi_scale();
+        let toolbar = LEFT_TOOLBAR_W as f32 * self.ui_scale();
 
         self.canvas_pos = (
             toolbar + (screen.x - toolbar - canvas.x) / 2.,
@@ -299,6 +304,62 @@ impl UiState {
         )
             .into();
         self.camera = Position::ZERO_F32;
+    }
+
+    /// Opens anything dropped onto the window, routing each file the same way
+    /// the menu and the recent files list do.
+    ///
+    /// `get_dropped_files` takes the queue rather than copying it, so files are
+    /// only seen once.
+    ///
+    /// Two quirks of miniquad 0.4 to be aware of:
+    ///
+    /// - A drop doesn't wake a blocking event loop, so the files are picked up
+    ///   on the next frame some other input causes. In practice the pointer is
+    ///   over the window and moves immediately afterwards.
+    /// - Only X11, Wayland, macOS and web dispatch the drop event. On Windows
+    ///   miniquad records the paths but never fires it, so this does nothing
+    ///   there until that's fixed upstream.
+    fn handle_dropped_files(&mut self) -> Result<()> {
+        for file in macroquad::input::get_dropped_files() {
+            if let Some(path) = file.path {
+                self.open_path(path)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Framebuffer pixels per interface point: what the display asks for, times
+    /// the user's own preference.
+    ///
+    /// Handing this to egui each frame is also what keeps the interface the
+    /// right size at all: egui-miniquad 0.16 works out the display scaling but
+    /// never passes it on to egui, which then lays everything out as if the
+    /// screen were unscaled.
+    pub fn ui_scale(&self) -> f32 {
+        dpi_scale() * self.settings.ui_scale
+    }
+
+    /// Asks for another frame when something on screen is still moving.
+    ///
+    /// With `blocking_event_loop` the editor only redraws in response to input,
+    /// so every animation has to keep itself alive. Without this the marching
+    /// ants around a selection freeze, and the preview stops cycling frames.
+    fn schedule_next_frame(&self) {
+        let animating = self.inner.selection().is_some()
+            || self.inner.free_image().is_some()
+            || self.spritesheet_frames() > 1;
+
+        if animating || self.gui.wants_repaint() {
+            macroquad::miniquad::window::schedule_update();
+        }
+    }
+
+    fn spritesheet_frames(&self) -> u32 {
+        let sheet = self.inner.spritesheet();
+
+        sheet.x as u32 * sheet.y as u32
     }
 
     /// Opens a path, loading it as a project or importing it as an image
@@ -361,7 +422,7 @@ impl UiState {
             camera: self.camera(),
             canvas_size: (self.canvas().width() as f32, self.canvas().height() as f32).into(),
             selection: self.inner.selection(),
-            show_grid: self.show_grid,
+            show_grid: self.settings.show_grid,
         }
     }
 
@@ -406,6 +467,8 @@ impl UiState {
         egui_macroquad::draw();
         self.gui.draw_preview(self);
         self.mouse.draw();
+
+        self.schedule_next_frame();
 
         Ok(())
     }
@@ -471,7 +534,18 @@ impl UiState {
             UiEvent::ZoomAdd(n) => self.zoom_add(n),
             UiEvent::ZoomMul(n) => self.zoom_mul(n),
             UiEvent::SetZoom100 => self.set_zoom(1.),
-            UiEvent::ToggleGrid => self.show_grid = !self.show_grid,
+            UiEvent::ToggleGrid => {
+                self.settings.show_grid = !self.settings.show_grid;
+                self.settings.save();
+            }
+            UiEvent::SetUiScale(scale) => {
+                self.settings.ui_scale = scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE);
+                self.settings.save();
+                // The tool windows change size with the scale, so the space the
+                // canvas is centered in changes too.
+                self.center_canvas();
+            }
+            UiEvent::OpenSettings => self.gui.open_settings(),
             UiEvent::MoveCamera(dir) => self.move_camera(dir),
             UiEvent::MoveCameraExact(p) => self.move_camera_exact(p),
             UiEvent::MouseOverGui => self.mouse_over_gui = true,
