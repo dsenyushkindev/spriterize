@@ -138,6 +138,10 @@ impl MenuBar {
                         events.push(Effect::UiEvent(UiEvent::SetZoom100));
                         ui.close_menu();
                     }
+                    if ui.button("Toggle pixel grid").clicked() {
+                        events.push(Effect::UiEvent(UiEvent::ToggleGrid));
+                        ui.close_menu();
+                    }
                 });
                 ui.menu_button("Canvas", |ui| {
                     /*

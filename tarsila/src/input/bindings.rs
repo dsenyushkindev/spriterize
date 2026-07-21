@@ -173,7 +173,7 @@ impl KeyBindings {
                     InputEvent::KeyModifier(KeyboardModifier::Control),
                 ]
                 .into(),
-                UiEvent::ZoomAdd(0.25).into(),
+                UiEvent::ZoomMul(1.25).into(),
             ),
             (
                 vec![
@@ -181,7 +181,7 @@ impl KeyBindings {
                     InputEvent::KeyModifier(KeyboardModifier::Control),
                 ]
                 .into(),
-                UiEvent::ZoomAdd(-0.25).into(),
+                UiEvent::ZoomMul(0.8).into(),
             ),
             (
                 InputEvent::KeyPress(mq::KeyCode::Minus.into()).into(),
@@ -190,6 +190,15 @@ impl KeyBindings {
             (
                 InputEvent::KeyPress(mq::KeyCode::Equal.into()).into(),
                 UiEvent::ZoomIn.into(),
+            ),
+            // GRID
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::G.into()),
+                ]
+                .into(),
+                UiEvent::ToggleGrid.into(),
             ),
             // DRAWING
             (

@@ -61,6 +61,7 @@ pub enum UiEvent {
     ResetZoom,
     ZoomAdd(f32),
     ZoomMul(f32),
+    ToggleGrid,
     MoveCamera(Direction),
     MoveCameraExact(Point<i32>),
     MouseOverGui,
@@ -127,6 +128,7 @@ pub struct UiState {
     camera: Position<f32>,
     canvas_pos: Position<f32>,
     zoom: f32,
+    show_grid: bool,
     layer_textures: Vec<Texture2D>,
     input: InputManager,
     mouse: MouseManager,
@@ -163,6 +165,7 @@ impl Default for UiState {
             camera: Position::ZERO_F32,
             canvas_pos: (CANVAS_X, CANVAS_Y).into(),
             zoom: DEFAULT_ZOOM_LEVEL,
+            show_grid: true,
             layer_textures: vec![drawing],
             input,
             mouse: MouseManager::new(),
@@ -244,6 +247,7 @@ impl UiState {
             camera: self.camera(),
             canvas_size: (self.canvas().width() as f32, self.canvas().height() as f32).into(),
             selection: self.inner.selection(),
+            show_grid: self.show_grid,
         }
     }
 
@@ -254,6 +258,7 @@ impl UiState {
 
         self.bg.draw(ctx);
         graphics::draw_canvas(&*self);
+        graphics::draw_grid(ctx);
         graphics::draw_spritesheet_boundaries(ctx);
 
         let (x, y) = macroquad::prelude::mouse_position();
@@ -354,7 +359,8 @@ impl UiState {
             UiEvent::ResetZoom => self.reset_zoom(),
             UiEvent::ZoomAdd(n) => self.zoom_add(n),
             UiEvent::ZoomMul(n) => self.zoom_mul(n),
-            UiEvent::SetZoom100 => self.zoom = 1.,
+            UiEvent::SetZoom100 => self.set_zoom(1.),
+            UiEvent::ToggleGrid => self.show_grid = !self.show_grid,
             UiEvent::MoveCamera(dir) => self.move_camera(dir),
             UiEvent::MoveCameraExact(p) => self.move_camera_exact(p),
             UiEvent::MouseOverGui => self.mouse_over_gui = true,
@@ -488,15 +494,51 @@ impl UiState {
     }
 
     pub fn change_zoom<F: Fn(f32) -> f32>(&mut self, op: F) {
-        let new_zoom = (op)(self.zoom).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.set_zoom((op)(self.zoom));
+    }
+
+    pub fn set_zoom_at(&mut self, zoom: f32, anchor: Position<f32>) {
+        let new_zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         let fac = new_zoom / self.zoom;
-        self.camera.x *= fac;
-        self.camera.y *= fac;
+
+        let origin = self.canvas_pos - self.camera;
+        let new_origin_x = anchor.x - (anchor.x - origin.x) * fac;
+        let new_origin_y = anchor.y - (anchor.y - origin.y) * fac;
+
+        self.camera = (
+            self.canvas_pos.x - new_origin_x,
+            self.canvas_pos.y - new_origin_y,
+        )
+            .into();
         self.zoom = new_zoom;
     }
 
+    pub fn set_zoom(&mut self, zoom: f32) {
+        self.set_zoom_at(zoom, self.zoom_anchor());
+    }
+
+    fn zoom_anchor(&self) -> Position<f32> {
+        let (x, y) = macroquad::prelude::mouse_position();
+        let (w, h) = (
+            macroquad::prelude::screen_width(),
+            macroquad::prelude::screen_height(),
+        );
+        let on_canvas_area =
+            !self.mouse_over_gui && x >= LEFT_TOOLBAR_W as f32 && x < w && y >= 0. && y < h;
+
+        if on_canvas_area {
+            (x, y).into()
+        } else {
+            (
+                LEFT_TOOLBAR_W as f32 + (w - LEFT_TOOLBAR_W as f32) / 2.,
+                h / 2.,
+            )
+                .into()
+        }
+    }
+
     pub fn reset_zoom(&mut self) {
-        self.zoom = DEFAULT_ZOOM_LEVEL;
+        self.set_zoom(DEFAULT_ZOOM_LEVEL);
     }
 
     pub fn move_camera(&mut self, direction: Direction) {

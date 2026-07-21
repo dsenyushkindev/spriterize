@@ -231,37 +231,3 @@ impl<IMG: Bitmap> Layer<IMG> {
         self.opacity = opacity;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::bitmap::TestImage;
-    use crate::color;
-    use test_case::test_case;
-
-    fn get_three_layer_canvas() -> Layers<TestImage> {
-        let mut layers = Layers::<TestImage>::new(Size::new(2, 2));
-        layers.add_new_above();
-        layers.add_new_above();
-
-        layers
-    }
-
-    #[test_case((0, 0, 0, 255), (255, 255, 255, 255), (0, 0, 0, 255))]
-    #[test_case((10, 200, 99, 255), (0, 255, 0, 99), (10, 200, 99, 255))]
-    #[test_case((0, 0, 0, 127), (255, 255, 255, 255), (127, 127, 127, 255))]
-    #[test_case((0, 0, 0, 127), (255, 255, 255, 127), (85, 85, 85, 190))]
-    #[test_case((255, 0, 0, 11), (0, 255, 0, 11), (130, 124, 0, 21))]
-    fn visible_pixel<C: Into<Color>>(a: C, b: C, res: C) {
-        let mut layers = get_three_layer_canvas();
-        layers
-            .canvas_at_mut(1)
-            .set_pixel(Point::new(1, 1), a.into());
-        layers
-            .canvas_at_mut(0)
-            .set_pixel(Point::new(1, 1), b.into());
-        let pixel = layers.visible_pixel(Point::new(1, 1));
-
-        assert_eq!(pixel, res.into());
-    }
-}

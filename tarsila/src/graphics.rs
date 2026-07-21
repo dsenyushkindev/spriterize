@@ -10,6 +10,9 @@ const DASHED_LINE_SEGMENT: f32 = 5.;
 const DASHED_LINE_ANIMATION_MS: u128 = 250;
 const SPRSHEET_LINE_THICKNESS: f32 = 1.;
 const SPRSHEET_LINE_COLOR: MqColor = BLACK;
+const GRID_LINE_THICKNESS: f32 = 1.;
+const GRID_LINE_COLOR: MqColor = MqColor::new(0., 0., 0., 0.2);
+const GRID_MIN_ZOOM: f32 = 3.;
 
 #[derive(Debug, Copy, Clone)]
 pub struct DrawContext {
@@ -19,6 +22,7 @@ pub struct DrawContext {
     pub camera: Position<f32>,
     pub canvas_size: Size<f32>,
     pub selection: Option<Selection>,
+    pub show_grid: bool,
 }
 
 pub fn draw_texture_helper(texture: Texture2D, p: Position<f32>, scale: f32) {
@@ -108,6 +112,42 @@ pub fn draw_selection(ctx: DrawContext, free_image: Option<&FreeImage<WrappedIma
         h: (rect.h as f32 * ctx.scale) as i32,
     };
     draw_animated_dashed_rect(r);
+}
+
+pub fn draw_grid(ctx: DrawContext) {
+    if !ctx.show_grid || ctx.scale < GRID_MIN_ZOOM {
+        return;
+    }
+
+    let p0 = ctx.canvas_pos - ctx.camera;
+
+    let first_col = (-p0.x / ctx.scale).floor().max(0.) as i32;
+    let last_col = ((screen_width() - p0.x) / ctx.scale)
+        .ceil()
+        .min(ctx.canvas_size.x) as i32;
+    let first_row = (-p0.y / ctx.scale).floor().max(0.) as i32;
+    let last_row = ((screen_height() - p0.y) / ctx.scale)
+        .ceil()
+        .min(ctx.canvas_size.y) as i32;
+
+    if first_col > last_col || first_row > last_row {
+        return;
+    }
+
+    let x0 = p0.x + first_col as f32 * ctx.scale;
+    let x1 = p0.x + last_col as f32 * ctx.scale;
+    let y0 = p0.y + first_row as f32 * ctx.scale;
+    let y1 = p0.y + last_row as f32 * ctx.scale;
+
+    for i in first_col..=last_col {
+        let x = p0.x + i as f32 * ctx.scale;
+        draw_line(x, y0, x, y1, GRID_LINE_THICKNESS, GRID_LINE_COLOR);
+    }
+
+    for j in first_row..=last_row {
+        let y = p0.y + j as f32 * ctx.scale;
+        draw_line(x0, y, x1, y, GRID_LINE_THICKNESS, GRID_LINE_COLOR);
+    }
 }
 
 pub fn draw_spritesheet_boundaries(ctx: DrawContext) {
