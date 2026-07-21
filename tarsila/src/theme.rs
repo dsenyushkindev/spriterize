@@ -23,7 +23,6 @@ pub const CANVAS_SURROUND: MqColor = MqColor::new(0.102, 0.102, 0.102, 1.); // 2
 pub const CHECKER_1: LapixColor = LapixColor::new(224, 224, 224, 255);
 pub const CHECKER_2: LapixColor = LapixColor::new(192, 192, 192, 255);
 
-
 pub const GRID_LINE: MqColor = MqColor::new(1., 1., 1., 0.18);
 
 pub const SPRITESHEET_LINE: MqColor = MqColor::new(1., 1., 1., 0.55);
