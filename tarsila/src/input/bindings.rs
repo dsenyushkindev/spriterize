@@ -293,6 +293,24 @@ impl KeyBindings {
                 .into(),
                 Event::Undo.into(),
             ),
+            // REDO
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::Y.into()),
+                ]
+                .into(),
+                Event::Redo.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyModifier(KeyboardModifier::Shift),
+                    InputEvent::KeyPress(mq::KeyCode::Z.into()),
+                ]
+                .into(),
+                Event::Redo.into(),
+            ),
             // COPY + PASTE
             (
                 vec![

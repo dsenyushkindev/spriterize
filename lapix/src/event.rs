@@ -125,6 +125,8 @@ pub enum Event {
     ApplyTransform(Transform),
     /// Undo the last undoable action
     Undo,
+    /// Redo the last action undone by [`Event::Undo`]
+    Redo,
 }
 
 impl Event {
@@ -169,6 +171,7 @@ impl Event {
         matches!(
             self,
             Self::Undo
+                | Self::Redo
                 | Self::NewLayerAbove
                 | Self::NewLayerBelow
                 | Self::DeleteLayer(_)

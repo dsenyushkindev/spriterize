@@ -118,6 +118,8 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             spritesheet: state.inner.spritesheet(),
             zoom: state.zoom,
             fps: state.fps,
+            can_undo: state.inner.can_undo(),
+            can_redo: state.inner.can_redo(),
         }
     }
 }

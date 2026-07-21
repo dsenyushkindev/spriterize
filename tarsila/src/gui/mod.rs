@@ -32,6 +32,8 @@ pub struct GuiSyncParams {
     pub spritesheet: Size<u8>,
     pub zoom: f32,
     pub fps: f32,
+    pub can_undo: bool,
+    pub can_redo: bool,
 }
 
 pub struct Gui {
@@ -77,7 +79,12 @@ impl Gui {
             params.layers_alpha.clone(),
         );
         self.palette.sync(params.palette.clone());
-        self.menu.sync(params.canvas_size, params.spritesheet);
+        self.menu.sync(
+            params.canvas_size,
+            params.spritesheet,
+            params.can_undo,
+            params.can_redo,
+        );
         self.status_bar.sync(params);
     }
 

@@ -12,6 +12,8 @@ pub struct MenuBar {
     spritesheet: Size<u8>,
     canvas_size_str: Option<(String, String)>,
     spritesheet_str: Option<(String, String)>,
+    can_undo: bool,
+    can_redo: bool,
 }
 
 impl MenuBar {
@@ -26,12 +28,22 @@ impl MenuBar {
             spritesheet: (1, 1).into(),
             canvas_size_str: None,
             spritesheet_str: None,
+            can_undo: false,
+            can_redo: false,
         }
     }
 
-    pub fn sync(&mut self, canvas_size: Size<i32>, spritesheet: Size<u8>) {
+    pub fn sync(
+        &mut self,
+        canvas_size: Size<i32>,
+        spritesheet: Size<u8>,
+        can_undo: bool,
+        can_redo: bool,
+    ) {
         self.canvas_size = canvas_size;
         self.spritesheet = spritesheet;
+        self.can_undo = can_undo;
+        self.can_redo = can_redo;
     }
 
     pub fn update(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
@@ -118,6 +130,28 @@ impl MenuBar {
                     }
                     if ui.button("Exit").clicked() {
                         self.show_confirm_exit_window = true;
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(
+                            self.can_undo,
+                            egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                        )
+                        .clicked()
+                    {
+                        events.push(Event::Undo.into());
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.can_redo,
+                            egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                        )
+                        .clicked()
+                    {
+                        events.push(Event::Redo.into());
                         ui.close_menu();
                     }
                 });

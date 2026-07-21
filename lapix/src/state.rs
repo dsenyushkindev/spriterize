@@ -36,6 +36,8 @@ pub struct State<IMG> {
     clipboard: Option<IMG>,
     #[serde(skip, default = "Vec::new")]
     reversals: Vec<Action<IMG>>,
+    #[serde(skip, default = "Vec::new")]
+    redos: Vec<Action<IMG>>,
     #[serde(skip, default = "Option::default")]
     cur_reversal: Option<Action<IMG>>,
     #[serde(skip, default = "Option::default")]
@@ -62,6 +64,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             free_image: None,
             clipboard: None,
             reversals: Vec::new(),
+            redos: Vec::new(),
             cur_reversal: None,
             load_project_fn,
             save_project_fn,
@@ -87,12 +90,15 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     fn end_action(&mut self) {
         if let Some(action) = self.cur_reversal.take() {
             self.reversals.push(action);
+            // A new edit invalidates anything that was undone before it.
+            self.redos.clear();
         }
     }
 
     fn single_action(&mut self, action: Action<IMG>) {
         self.end_action();
         self.reversals.push(action);
+        self.redos.clear();
     }
 
     fn add_to_pixels_action(&mut self, actions: Vec<(Point<i32>, Color)>) -> Result<()> {
@@ -383,6 +389,13 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                 }
                 return Ok(self.undo());
             }
+            Event::Redo => {
+                #[allow(unused_must_use)]
+                {
+                    dbg!(t0.elapsed());
+                }
+                return Ok(self.redo());
+            }
         }
 
         if event.clears_selection() {
@@ -512,10 +525,44 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     /// the caller what needs to be updated visually
     fn undo(&mut self) -> CanvasEffect {
         if let Some(action) = self.reversals.pop() {
-            return action.apply(&mut self.layers);
+            let (effect, inverse) = action.apply(&mut self.layers);
+            // An action that changed nothing has nothing to redo, and pushing it
+            // would leave the redo stack looking non-empty to `can_redo`.
+            if !inverse.is_empty() {
+                self.redos.push(inverse);
+            }
+
+            return effect;
         }
 
         CanvasEffect::None
+    }
+
+    /// Redo the last undone action. Returns the [`CanvasEffect`] to signal to
+    /// the caller what needs to be updated visually
+    fn redo(&mut self) -> CanvasEffect {
+        if let Some(action) = self.redos.pop() {
+            let (effect, inverse) = action.apply(&mut self.layers);
+            // Pushed directly instead of via `single_action`, which would clear
+            // the redo stack we're walking back up.
+            if !inverse.is_empty() {
+                self.reversals.push(inverse);
+            }
+
+            return effect;
+        }
+
+        CanvasEffect::None
+    }
+
+    /// Whether there is an action available to [`Event::Undo`]
+    pub fn can_undo(&self) -> bool {
+        !self.reversals.is_empty()
+    }
+
+    /// Whether there is an action available to [`Event::Redo`]
+    pub fn can_redo(&self) -> bool {
+        !self.redos.is_empty()
     }
 
     /// When drawing lines, rectangles, etc. or moving things, there are visible
