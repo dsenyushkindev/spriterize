@@ -261,6 +261,29 @@ impl KeyBindings {
                     vec![Effect::UiEvent(UiEvent::MoveCameraExact(Point::ZERO - p))]
                 })),
             ),
+            // PAN WITH MIDDLE MOUSE BUTTON
+            (
+                InputEvent::MouseButtonPress(mq::MouseButton::Middle.into()).into(),
+                ActionSpec::Fx(vec![
+                    Effect::UiEvent(UiEvent::BlockCanvas),
+                    Effect::UiEvent(UiEvent::SetCursor(CursorType::Pan)),
+                ]),
+            ),
+            (
+                InputEvent::MouseButtonRelease(mq::MouseButton::Middle.into()).into(),
+                ActionSpec::Fx(vec![
+                    Effect::UiEvent(UiEvent::UnblockCanvas),
+                    Effect::UiEvent(UiEvent::SetPreviousCursor),
+                ]),
+            ),
+            (
+                KeySpec::FollowMouse(vec![InputEvent::MouseButtonDown(
+                    mq::MouseButton::Middle.into(),
+                )]),
+                ActionSpec::MouseFn(Box::new(|p| {
+                    vec![Effect::UiEvent(UiEvent::MoveCameraExact(Point::ZERO - p))]
+                })),
+            ),
             // UNDO
             (
                 vec![

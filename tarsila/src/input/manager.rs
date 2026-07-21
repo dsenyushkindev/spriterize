@@ -3,6 +3,12 @@ use crate::Effect;
 use lapix::Position;
 use macroquad::prelude as mq;
 
+const TRACKED_MOUSE_BUTTONS: [mq::MouseButton; 3] = [
+    mq::MouseButton::Left,
+    mq::MouseButton::Right,
+    mq::MouseButton::Middle,
+];
+
 #[derive(Debug)]
 pub struct InputManager {
     keys_to_track: Vec<KeyboardKey>,
@@ -43,37 +49,16 @@ impl InputManager {
 
         // mouse
 
-        if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
-            events.push(InputEvent::MouseButtonPress(MouseButton(
-                mq::MouseButton::Left,
-            )));
-        }
-        if mq::is_mouse_button_pressed(mq::MouseButton::Right) {
-            events.push(InputEvent::MouseButtonPress(MouseButton(
-                mq::MouseButton::Right,
-            )));
-        }
-
-        if mq::is_mouse_button_down(mq::MouseButton::Left) {
-            events.push(InputEvent::MouseButtonDown(MouseButton(
-                mq::MouseButton::Left,
-            )));
-        }
-        if mq::is_mouse_button_down(mq::MouseButton::Right) {
-            events.push(InputEvent::MouseButtonDown(MouseButton(
-                mq::MouseButton::Right,
-            )));
-        }
-
-        if mq::is_mouse_button_released(mq::MouseButton::Left) {
-            events.push(InputEvent::MouseButtonRelease(MouseButton(
-                mq::MouseButton::Left,
-            )));
-        }
-        if mq::is_mouse_button_released(mq::MouseButton::Right) {
-            events.push(InputEvent::MouseButtonRelease(MouseButton(
-                mq::MouseButton::Right,
-            )));
+        for button in TRACKED_MOUSE_BUTTONS {
+            if mq::is_mouse_button_pressed(button) {
+                events.push(InputEvent::MouseButtonPress(MouseButton(button)));
+            }
+            if mq::is_mouse_button_down(button) {
+                events.push(InputEvent::MouseButtonDown(MouseButton(button)));
+            }
+            if mq::is_mouse_button_released(button) {
+                events.push(InputEvent::MouseButtonRelease(MouseButton(button)));
+            }
         }
 
         if self.prev_mouse_canvas != self.mouse_canvas {
