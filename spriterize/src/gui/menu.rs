@@ -68,7 +68,7 @@ impl MenuBar {
                     if ui.button("Save Project").clicked() {
                         ui.close_menu();
                         let mut dialog = rfd::FileDialog::new()
-                            .add_filter("Tarsila files", &["tarsila"])
+                            .add_filter("Spriterize files", &["spriterize"])
                             .add_filter("All files", &["*"]);
 
                         if let Some(dir) = self.last_file.as_ref().and_then(|p| p.parent()) {
@@ -83,7 +83,7 @@ impl MenuBar {
                     if ui.button("Load Project").clicked() {
                         ui.close_menu();
                         let mut dialog = rfd::FileDialog::new()
-                            .add_filter("Tarsila files", &["tarsila"])
+                            .add_filter("Spriterize files", &["spriterize"])
                             .add_filter("All files", &["*"]);
 
                         if let Some(dir) = self.last_file.as_ref().and_then(|p| p.parent()) {

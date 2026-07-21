@@ -18,7 +18,6 @@ pub const WINDOW_W: i32 = 1000;
 pub const WINDOW_H: i32 = 600;
 pub const CANVAS_W: u16 = 64;
 pub const CANVAS_H: u16 = 64;
-const CANVAS_SCALE: f32 = 8.;
 const LEFT_TOOLBAR_W: u16 = 300;
 const CAMERA_SPEED: f32 = 12.;
 const BG_COLOR: MqColor = crate::theme::CANVAS_SURROUND;
@@ -28,10 +27,25 @@ const DEFAULT_ZOOM_LEVEL: f32 = 8.;
 pub const MIN_ZOOM: f32 = 0.125;
 pub const MAX_ZOOM: f32 = 1024.;
 
-// Center on the space after the toolbar
-const CANVAS_X: f32 = LEFT_TOOLBAR_W as f32 + ((WINDOW_W as u16 - LEFT_TOOLBAR_W) / 2) as f32
-    - (CANVAS_W as f32 * CANVAS_SCALE / 2.);
-const CANVAS_Y: f32 = (WINDOW_H / 2) as f32 - (CANVAS_H as f32 * CANVAS_SCALE / 2.);
+/// Size of the drawing area, in framebuffer pixels.
+fn screen_size() -> Size<f32> {
+    (
+        macroquad::prelude::screen_width(),
+        macroquad::prelude::screen_height(),
+    )
+        .into()
+}
+
+/// Ratio of framebuffer pixels (what macroquad draws in) to the logical points
+/// egui lays its widgets out in. This is 1.0 unless we're on a HiDPI display,
+/// where the two coordinate spaces come apart because of `high_dpi: true`.
+fn dpi_scale() -> f32 {
+    // Only reads the global context macroquad has already initialized by the
+    // time any of this runs.
+    unsafe { macroquad::window::get_internal_gl() }
+        .quad_context
+        .dpi_scale()
+}
 
 #[derive(Debug, Clone)]
 pub enum Effect {
@@ -131,6 +145,9 @@ pub struct UiState {
     canvas_pos: Position<f32>,
     zoom: f32,
     show_grid: bool,
+    /// Screen size as of the last time the canvas was centered. Starts at zero
+    /// so that the first frame always centers.
+    last_screen_size: Size<f32>,
     layer_textures: Vec<Texture2D>,
     input: InputManager,
     mouse: MouseManager,
@@ -165,9 +182,12 @@ impl Default for UiState {
             inner: state,
             gui: Gui::new(),
             camera: Position::ZERO_F32,
-            canvas_pos: (CANVAS_X, CANVAS_Y).into(),
+            // Both are set by the first `sync_screen_size`, once the real size
+            // of the drawing area is known.
+            canvas_pos: Position::ZERO_F32,
             zoom: DEFAULT_ZOOM_LEVEL,
             show_grid: true,
+            last_screen_size: Size::ZERO_F32,
             layer_textures: vec![drawing],
             input,
             mouse: MouseManager::new(),
@@ -206,6 +226,7 @@ impl UiState {
         }
 
         self.mouse_over_gui = false;
+        self.sync_screen_size();
 
         self.gui.sync((&*self).into());
         let fx = self.gui.update();
@@ -222,6 +243,38 @@ impl UiState {
         self.sync_mouse();
 
         Ok(())
+    }
+
+    /// Re-centers the canvas whenever the drawing area changes size, which
+    /// covers the first frame, resizing the window and maximizing it.
+    ///
+    /// The size is compared rather than recomputed unconditionally so that
+    /// panning and zooming survive from one frame to the next.
+    fn sync_screen_size(&mut self) {
+        let screen = screen_size();
+
+        if screen != self.last_screen_size {
+            self.last_screen_size = screen;
+            self.center_canvas();
+        }
+    }
+
+    /// Centers the canvas in the area to the right of the tool windows, and
+    /// resets the scroll so that what is centered is what's on screen.
+    pub fn center_canvas(&mut self) {
+        let screen = screen_size();
+        let canvas = self.canvas_actual_size();
+        // `LEFT_TOOLBAR_W` is a width in egui's points, but the canvas is drawn
+        // in framebuffer pixels, so it has to be converted before the two can be
+        // used in the same calculation.
+        let toolbar = LEFT_TOOLBAR_W as f32 * dpi_scale();
+
+        self.canvas_pos = (
+            toolbar + (screen.x - toolbar - canvas.x) / 2.,
+            (screen.y - canvas.y) / 2.,
+        )
+            .into();
+        self.camera = Position::ZERO_F32;
     }
 
     fn process_fx(&mut self, fx: Vec<Effect>) -> Result<()> {
@@ -583,8 +636,9 @@ impl UiState {
         let canvas_size = self.canvas_actual_size();
         let canvas_pos = self.canvas_pos;
         let camera = self.camera;
-        let win_w = WINDOW_W as f32;
-        let win_h = WINDOW_H as f32;
+        let screen = screen_size();
+        let win_w = screen.x;
+        let win_h = screen.y;
 
         match direction {
             Direction::Up => canvas_pos.y - camera.y > win_h - buffer,

@@ -21,7 +21,7 @@ pub fn load(path: PathBuf) -> Vec<u8> {
 }
 
 fn header() -> Vec<u8> {
-    let mut bytes = format!("tarsila {VERSION} ").into_bytes();
+    let mut bytes = format!("spriterize {VERSION} ").into_bytes();
     bytes.append(&mut MAGIC.as_slice().to_owned());
 
     bytes

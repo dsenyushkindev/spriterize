@@ -1,6 +1,6 @@
 [package]
-name = "tarsila"
-authors = ["Y. D. Santos <yds12@protonmail.com>"]
+name = "spriterize"
+authors = ["Y. D. Santos <yds12@protonmail.com>", "Dmitrii Seniushkin <mr.verein@gmail.com>"]
 version = "0.1.2"
 edition = "2021"
 description = "GUI image editor for pixel art"
