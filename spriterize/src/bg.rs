@@ -64,7 +64,7 @@ impl Background {
                     ..Default::default()
                 };
                 draw_texture_ex(
-                    self.checkered_tile,
+                    &self.checkered_tile,
                     pos.x,
                     pos.y,
                     macroquad::prelude::WHITE,

@@ -38,8 +38,8 @@ pub fn invert_rgb(bytes: &mut [u8]) {
 pub fn apply_egui_visuals(egui_ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
 
-    visuals.menu_rounding = 2.0.into();
-    visuals.window_rounding = 2.0.into();
+    visuals.menu_corner_radius = 2.into();
+    visuals.window_corner_radius = 2.into();
 
     visuals.panel_fill = BG;
     visuals.window_fill = BG;

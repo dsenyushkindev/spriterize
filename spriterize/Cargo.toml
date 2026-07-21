@@ -16,10 +16,10 @@ license = "MIT/Apache-2.0"
 
 [dependencies]
 lapix = { path = "../lapix", version = "0.1.2" }
-egui-macroquad = { version = "0.15.0", default-features = false }
-macroquad = "0.3.25"
+egui-macroquad = { version = "0.17.3", default-features = false }
+macroquad = "0.4.15"
 rfd = "0.10.0"
-egui = "0.21.0"
+egui = "0.31.1"
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.40"
 

@@ -25,7 +25,7 @@ pub struct DrawContext {
     pub show_grid: bool,
 }
 
-pub fn draw_texture_helper(texture: Texture2D, p: Position<f32>, scale: f32) {
+pub fn draw_texture_helper(texture: &Texture2D, p: Position<f32>, scale: f32) {
     let w = texture.width();
     let h = texture.height();
 
@@ -77,7 +77,7 @@ pub fn draw_free_image(
     ctx: DrawContext,
     img: &FreeImage<WrappedImage>,
     layer_opacity: u8,
-    free_image_tex: Texture2D,
+    free_image_tex: &Texture2D,
 ) {
     let w = img.texture.width() as f32;
     let h = img.texture.height() as f32;

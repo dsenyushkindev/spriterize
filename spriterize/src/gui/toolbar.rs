@@ -62,7 +62,9 @@ pub struct ToolButton {
 impl ToolButton {
     pub fn new(tool: Tool) -> Self {
         let bytes = Resources::tool_icon(tool);
-        let mut img = Image::from_file_with_format(bytes, None);
+        // The icons are compiled in, so a decode failure is a build problem
+        // rather than something to recover from at runtime.
+        let mut img = Image::from_file_with_format(bytes, None).expect("bundled icon should decode");
         crate::theme::invert_rgb(&mut img.bytes);
 
         let x = TOOL_BTN_IMG_SIZE.x;
@@ -92,7 +94,9 @@ impl ToolButton {
             ui.style_mut().visuals.widgets.inactive.weak_bg_fill = crate::theme::ACCENT;
         }
         if ui
-            .add(egui::ImageButton::new(texture, texture.size_vec2()))
+            .add(egui::ImageButton::new(
+                egui::load::SizedTexture::from_handle(texture),
+            ))
             .on_hover_text(tooltip)
             .clicked()
         {

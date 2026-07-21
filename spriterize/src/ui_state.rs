@@ -44,9 +44,7 @@ fn screen_size() -> Size<f32> {
 fn dpi_scale() -> f32 {
     // Only reads the global context macroquad has already initialized by the
     // time any of this runs.
-    unsafe { macroquad::window::get_internal_gl() }
-        .quad_context
-        .dpi_scale()
+    macroquad::window::screen_dpi_scale()
 }
 
 #[derive(Debug, Clone)]
@@ -389,11 +387,8 @@ impl UiState {
 
         // TODO: most of this logic should be in some update method, not a draw one
         if let Some(img) = self.inner.free_image() {
-            // Macroquad's Texture2D is not automatically freed, so we need to free it manually,
-            // otherwise we risk exhausting video memory (and even system memory on some systems).
-            if let Some(tex) = &mut self.free_image_tex {
-                tex.delete();
-            }
+            // Since macroquad 0.4 a Texture2D frees its GPU memory when dropped,
+            // so replacing the previous one here is enough.
             let tex = Texture2D::from_image(&img.texture.0);
             tex.set_filter(FilterMode::Nearest);
             self.free_image_tex = Some(tex);
@@ -402,7 +397,7 @@ impl UiState {
                 ctx,
                 img,
                 self.inner.layers().active().opacity(),
-                self.free_image_tex.unwrap(),
+                self.free_image_tex.as_ref().unwrap(),
             );
         } else {
             self.free_image_tex = None;
@@ -619,8 +614,8 @@ impl UiState {
         self.inner.layers().count()
     }
 
-    pub fn layer_tex(&self, index: usize) -> Texture2D {
-        self.layer_textures[index]
+    pub fn layer_tex(&self, index: usize) -> &Texture2D {
+        &self.layer_textures[index]
     }
 
     pub fn zoom_in(&mut self) {

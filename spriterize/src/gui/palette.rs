@@ -166,7 +166,8 @@ impl Palette {
                             Color::from(self.colors[i]).value()
                         );
 
-                        let btn = egui::ImageButton::new(tex, tex.size_vec2());
+                        let btn =
+                            egui::ImageButton::new(egui::load::SizedTexture::from_handle(tex));
                         let btn = ui.add(btn).on_hover_text(tooltip);
                         if btn.clicked() {
                             fx.push(Event::SetMainColor(self.colors[i].into()).into());

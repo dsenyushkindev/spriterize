@@ -100,7 +100,10 @@ pub struct Cursor {
 impl Cursor {
     pub fn new(typ: CursorType, offset: Point<f32>) -> Self {
         let bytes = Resources::cursor(typ);
-        let mut img = Image::from_file_with_format(bytes, None);
+        // The cursors are compiled in, so a decode failure is a build problem
+        // rather than something to recover from at runtime.
+        let mut img =
+            Image::from_file_with_format(bytes, None).expect("bundled cursor should decode");
         crate::theme::invert_rgb(&mut img.bytes);
         let texture = Texture2D::from_image(&img);
         texture.set_filter(FilterMode::Nearest);
@@ -111,7 +114,7 @@ impl Cursor {
     pub fn draw(&self) {
         let (x, y) = mouse_position();
         graphics::draw_texture_helper(
-            self.texture,
+            &self.texture,
             (x + self.offset.x, y + self.offset.y).into(),
             1.,
         )
