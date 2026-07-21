@@ -64,7 +64,6 @@ impl Gui {
     pub fn sync(&mut self, params: GuiSyncParams) {
         self.mouse_on_canvas = params.is_on_canvas;
 
-        self.toolbar.sync(params.main_color);
         self.selected_tool = params.selected_tool;
         self.layers_panel.sync(
             params.num_layers,
@@ -78,7 +77,7 @@ impl Gui {
             params.layers_vis.clone(),
             params.layers_alpha.clone(),
         );
-        self.palette.sync(params.palette.clone());
+        self.palette.sync(params.palette.clone(), params.main_color);
         self.menu.sync(
             params.canvas_size,
             params.spritesheet,

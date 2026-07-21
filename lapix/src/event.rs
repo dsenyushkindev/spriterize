@@ -47,10 +47,12 @@ pub enum Event {
     SaveProject(PathBuf),
     /// Load a drawing project from a path
     LoadProject(PathBuf),
-    /// Load a palette from a file path. The file must be an image. The image
-    /// will be read and colors will be added to the palette without repetition,
-    /// until a certain limit of colors is reached.
+    /// Load a palette from a file path. A `.gpl` file is read as a GIMP
+    /// palette; any other file is read as an image, whose colors are added to
+    /// the palette without repetition, until a certain limit is reached.
     LoadPalette(PathBuf),
+    /// Save the current palette to a file path, in the GIMP palette format
+    SavePalette(PathBuf),
     /// Apply bucket to a point (fill with color)
     Bucket(Point<i32>),
     /// Similar to `BrushStart`, but for eraser

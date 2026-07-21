@@ -20,4 +20,6 @@ pub enum Error {
     ReversalNotSet,
     #[error("Codec error: {0}")]
     CodecError(#[from] bincode::Error),
+    #[error("Invalid palette file: {0}")]
+    InvalidPalette(String),
 }

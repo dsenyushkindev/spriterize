@@ -250,6 +250,9 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::LoadPalette(path) => {
                 self.palette = Palette::from_file(path.to_string_lossy().as_ref())?
             }
+            Event::SavePalette(path) => {
+                self.palette.save_to_file(path.to_string_lossy().as_ref())?
+            }
             Event::AddToPalette(color) => self.palette.add_color(color),
             Event::RemoveFromPalette(color) => self.palette.remove_color(color),
             Event::Bucket(p) => {
