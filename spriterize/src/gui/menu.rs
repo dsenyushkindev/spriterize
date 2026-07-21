@@ -1,9 +1,9 @@
 use crate::{Effect, UiEvent};
-use lapix::{Event, Size, Tool, Transform};
+use lapix::{Event, Size, Transform};
 use std::path::PathBuf;
 
 pub struct MenuBar {
-    last_file: Option<PathBuf>,
+    recent_files: Vec<PathBuf>,
     show_resize_window: bool,
     show_spritesheet_window: bool,
     show_confirm_exit_window: bool,
@@ -19,7 +19,7 @@ pub struct MenuBar {
 impl MenuBar {
     pub fn new() -> Self {
         Self {
-            last_file: None,
+            recent_files: Vec::new(),
             show_resize_window: false,
             show_spritesheet_window: false,
             show_confirm_exit_window: false,
@@ -33,17 +33,27 @@ impl MenuBar {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn sync(
         &mut self,
         canvas_size: Size<i32>,
         spritesheet: Size<u8>,
         can_undo: bool,
         can_redo: bool,
+        recent_files: Vec<PathBuf>,
+        new_project_requested: bool,
     ) {
         self.canvas_size = canvas_size;
         self.spritesheet = spritesheet;
         self.can_undo = can_undo;
         self.can_redo = can_redo;
+        self.recent_files = recent_files;
+
+        // The New Project shortcut goes through the same confirmation as the
+        // menu entry, rather than discarding the project outright.
+        if new_project_requested {
+            self.show_confirm_new_window = true;
+        }
     }
 
     pub fn update(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
@@ -61,73 +71,57 @@ impl MenuBar {
         egui::TopBottomPanel::top("menu_bar").show(egui_ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("New").clicked() {
-                        self.show_confirm_new_window = true;
-                        ui.close_menu();
-                    }
-                    if ui.button("Save Project").clicked() {
-                        ui.close_menu();
-                        let mut dialog = rfd::FileDialog::new()
-                            .add_filter("Spriterize files", &["spriterize"])
-                            .add_filter("All files", &["*"]);
-
-                        if let Some(dir) = self.last_file.as_ref().and_then(|p| p.parent()) {
-                            dialog = dialog.set_directory(dir).set_file_name("project.tarsila");
-                        }
-
-                        if let Some(path) = dialog.save_file() {
-                            self.last_file = Some(path.clone());
-                            events.push(Event::SaveProject(path).into());
-                        }
-                    }
-                    if ui.button("Load Project").clicked() {
-                        ui.close_menu();
-                        let mut dialog = rfd::FileDialog::new()
-                            .add_filter("Spriterize files", &["spriterize"])
-                            .add_filter("All files", &["*"]);
-
-                        if let Some(dir) = self.last_file.as_ref().and_then(|p| p.parent()) {
-                            dialog = dialog.set_directory(dir);
-                        }
-
-                        if let Some(path) = dialog.pick_file() {
-                            self.last_file = Some(path.clone());
-                            events.push(Event::LoadProject(path).into());
+                    // The dialogs themselves live in `crate::files`, so that the
+                    // keyboard shortcuts can open the same ones.
+                    for (label, shortcut, event) in [
+                        ("New", "Ctrl+N", UiEvent::RequestNewProject),
+                        ("Open Project", "Ctrl+O", UiEvent::OpenProject),
+                        ("Save Project", "Ctrl+S", UiEvent::SaveProject),
+                        ("Save Project As", "Ctrl+Shift+S", UiEvent::SaveProjectAs),
+                        ("Export Image", "Ctrl+E", UiEvent::ExportImage),
+                        ("Import Image", "Ctrl+I", UiEvent::ImportImage),
+                    ] {
+                        if ui
+                            .add(egui::Button::new(label).shortcut_text(shortcut))
+                            .clicked()
+                        {
+                            events.push(Effect::UiEvent(event));
+                            ui.close_menu();
                         }
                     }
-                    if ui.button("Export Image").clicked() {
-                        ui.close_menu();
-                        let mut dialog = rfd::FileDialog::new()
-                            .add_filter("PNG files", &["png"])
-                            .add_filter("JPEG files", &["jpg", "jpeg"])
-                            .add_filter("All files", &["*"]);
 
-                        if let Some(dir) = self.last_file.as_ref().and_then(|p| p.parent()) {
-                            dialog = dialog.set_directory(dir);
+                    ui.menu_button("Open Recent", |ui| {
+                        if self.recent_files.is_empty() {
+                            ui.add_enabled(false, egui::Button::new("(nothing yet)"));
+                            return;
                         }
 
-                        if let Some(path) = dialog.save_file() {
-                            self.last_file = Some(path.clone());
-                            events.push(Event::Save(path).into());
-                        }
-                    }
-                    if ui.button("Import Image").clicked() {
-                        ui.close_menu();
-                        let mut dialog = rfd::FileDialog::new()
-                            .add_filter("All files", &["*"])
-                            .add_filter("PNG files", &["png"])
-                            .add_filter("JPEG files", &["jpg", "jpeg"]);
+                        for path in &self.recent_files {
+                            let label = path
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.to_string_lossy().into_owned());
 
-                        if let Some(dir) = self.last_file.as_ref().and_then(|p| p.parent()) {
-                            dialog = dialog.set_directory(dir);
+                            if ui
+                                .button(label)
+                                .on_hover_text(path.to_string_lossy())
+                                .clicked()
+                            {
+                                events.push(Effect::UiEvent(UiEvent::OpenRecent(path.clone())));
+                                ui.close_menu();
+                            }
                         }
 
-                        if let Some(path) = dialog.pick_file() {
-                            self.last_file = Some(path.clone());
-                            events.push(Event::OpenFile(path).into());
-                            events.push(Event::SetTool(Tool::Move).into());
+                        ui.separator();
+
+                        if ui.button("Clear").clicked() {
+                            events.push(Effect::UiEvent(UiEvent::ClearRecent));
+                            ui.close_menu();
                         }
-                    }
+                    });
+
+                    ui.separator();
+
                     if ui.button("Exit").clicked() {
                         self.show_confirm_exit_window = true;
                         ui.close_menu();

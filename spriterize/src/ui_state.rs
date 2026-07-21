@@ -4,9 +4,11 @@ use crate::gui::{Gui, GuiSyncParams};
 use crate::input::bindings::KeyBindings;
 use crate::input::manager::InputManager;
 use crate::mouse::{CursorType, MouseManager};
+use crate::files::{self, RecentFiles};
 use crate::project;
 use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
+use std::path::PathBuf;
 use lapix::primitives::*;
 use lapix::{Canvas, CanvasEffect, Event, Layer, LoadProject, SaveProject, Selection, State, Tool};
 use macroquad::prelude::Color as MqColor;
@@ -82,6 +84,15 @@ pub enum UiEvent {
     Paste,
     Exit,
     NewProject,
+    /// Ask the menu to put up its "discard the current project?" confirmation
+    RequestNewProject,
+    OpenProject,
+    SaveProject,
+    SaveProjectAs,
+    ExportImage,
+    ImportImage,
+    OpenRecent(PathBuf),
+    ClearRecent,
     GuiInteraction,
     SetZoom100,
     SetCursor(CursorType),
@@ -134,6 +145,9 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             fps: state.fps,
             can_undo: state.inner.can_undo(),
             can_redo: state.inner.can_redo(),
+            recent_files: state.recent.paths().to_vec(),
+            current_file: state.current_file.clone(),
+            new_project_requested: state.new_project_requested,
         }
     }
 }
@@ -161,6 +175,12 @@ pub struct UiState {
     fps: f32,
     bg: Background,
     prev_cursor: CursorType,
+    /// The file this project was last opened from or saved to.
+    current_file: Option<PathBuf>,
+    recent: RecentFiles,
+    /// Set by the New Project shortcut, and consumed by the menu on the next
+    /// frame to raise its confirmation window.
+    new_project_requested: bool,
 }
 
 impl Default for UiState {
@@ -201,6 +221,9 @@ impl Default for UiState {
             bg: Background::new(),
             prev_cursor: CursorType::Tool(Tool::Brush),
             manual_canvas_block: false,
+            current_file: None,
+            recent: RecentFiles::load(),
+            new_project_requested: false,
         }
     }
 }
@@ -229,6 +252,9 @@ impl UiState {
         self.sync_screen_size();
 
         self.gui.sync((&*self).into());
+        // The menu has now seen the request and raised its confirmation window,
+        // so it mustn't be raised again on the following frames.
+        self.new_project_requested = false;
         let fx = self.gui.update();
         self.process_fx(fx)?;
 
@@ -275,6 +301,41 @@ impl UiState {
         )
             .into();
         self.camera = Position::ZERO_F32;
+    }
+
+    /// Opens a path, loading it as a project or importing it as an image
+    /// depending on its extension. This is what the recent files list replays.
+    fn open_path(&mut self, path: PathBuf) -> Result<()> {
+        if files::is_project(&path) {
+            self.execute(Event::LoadProject(path.clone()))?;
+        } else {
+            self.execute(Event::OpenFile(path.clone()))?;
+            self.execute(Event::SetTool(Tool::Move))?;
+        }
+
+        self.set_current_file(path);
+
+        Ok(())
+    }
+
+    fn save_project_as(&mut self) -> Result<()> {
+        if let Some(path) = files::save_project(self.current_file.as_deref()) {
+            self.save_project_to(path)?;
+        }
+
+        Ok(())
+    }
+
+    fn save_project_to(&mut self, path: PathBuf) -> Result<()> {
+        self.execute(Event::SaveProject(path.clone()))?;
+        self.set_current_file(path);
+
+        Ok(())
+    }
+
+    fn set_current_file(&mut self, path: PathBuf) {
+        self.recent.push(path.clone());
+        self.current_file = Some(path);
     }
 
     fn process_fx(&mut self, fx: Vec<Effect>) -> Result<()> {
@@ -425,6 +486,36 @@ impl UiState {
             }
             UiEvent::Exit => self.must_exit = true,
             UiEvent::NewProject => *self = UiState::default(),
+            UiEvent::RequestNewProject => self.new_project_requested = true,
+            UiEvent::OpenProject => {
+                if let Some(path) = files::open_project(self.current_file.as_deref()) {
+                    self.open_path(path)?;
+                }
+            }
+            UiEvent::SaveProject => {
+                // Save straight back to the open project; only ask for a path
+                // when there isn't one yet.
+                match self.current_file.clone().filter(|p| files::is_project(p)) {
+                    Some(path) => self.save_project_to(path)?,
+                    None => self.save_project_as()?,
+                }
+            }
+            UiEvent::SaveProjectAs => self.save_project_as()?,
+            UiEvent::ExportImage => {
+                if let Some(path) = files::export_image(self.current_file.as_deref()) {
+                    self.execute(Event::Save(path.clone()))?;
+                    // Recorded as recent so it can be re-imported, but it isn't
+                    // made current: the project is still the open document.
+                    self.recent.push(path);
+                }
+            }
+            UiEvent::ImportImage => {
+                if let Some(path) = files::import_image(self.current_file.as_deref()) {
+                    self.open_path(path)?;
+                }
+            }
+            UiEvent::OpenRecent(path) => self.open_path(path)?,
+            UiEvent::ClearRecent => self.recent.clear(),
             UiEvent::SetPreviousCursor => self.mouse.set_cursor(self.prev_cursor),
             UiEvent::SetCursor(c) => {
                 self.prev_cursor = self.mouse.cursor();

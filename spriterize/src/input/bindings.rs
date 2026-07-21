@@ -284,6 +284,60 @@ impl KeyBindings {
                     vec![Effect::UiEvent(UiEvent::MoveCameraExact(Point::ZERO - p))]
                 })),
             ),
+            // FILES
+            //
+            // These use Control, so they don't collide with the unmodified
+            // letters that select tools: `matches_mod` requires the modifier
+            // sets to be equal, not merely overlapping.
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::N.into()),
+                ]
+                .into(),
+                UiEvent::RequestNewProject.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::O.into()),
+                ]
+                .into(),
+                UiEvent::OpenProject.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::S.into()),
+                ]
+                .into(),
+                UiEvent::SaveProject.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyModifier(KeyboardModifier::Shift),
+                    InputEvent::KeyPress(mq::KeyCode::S.into()),
+                ]
+                .into(),
+                UiEvent::SaveProjectAs.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::E.into()),
+                ]
+                .into(),
+                UiEvent::ExportImage.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::I.into()),
+                ]
+                .into(),
+                UiEvent::ImportImage.into(),
+            ),
             // UNDO
             (
                 vec![

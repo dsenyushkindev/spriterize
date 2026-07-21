@@ -1,6 +1,7 @@
 use crate::{Effect, UiEvent, UiState};
 use lapix::{Position, Size, Tool};
 use macroquad::prelude::*;
+use std::path::PathBuf;
 
 mod layers;
 mod menu;
@@ -34,6 +35,9 @@ pub struct GuiSyncParams {
     pub fps: f32,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub recent_files: Vec<PathBuf>,
+    pub current_file: Option<PathBuf>,
+    pub new_project_requested: bool,
 }
 
 pub struct Gui {
@@ -83,6 +87,8 @@ impl Gui {
             params.spritesheet,
             params.can_undo,
             params.can_redo,
+            params.recent_files.clone(),
+            params.new_project_requested,
         );
         self.status_bar.sync(params);
     }

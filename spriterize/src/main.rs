@@ -2,6 +2,7 @@ use macroquad::prelude::*;
 
 mod bg;
 mod error;
+mod files;
 mod graphics;
 mod gui;
 mod input;
