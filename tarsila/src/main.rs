@@ -8,6 +8,7 @@ mod input;
 mod mouse;
 mod project;
 mod resource;
+mod theme;
 mod ui_state;
 mod util;
 mod wrapped_image;

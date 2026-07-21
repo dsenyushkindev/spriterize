@@ -66,8 +66,8 @@ impl Preview {
                         * egui::vec2(self.canvas_size.x as f32, self.canvas_size.y as f32);
                     let scale = self.scale.parse().unwrap_or(1.);
 
-                    let image = egui::Image::new(tex, frame_size * scale)
-                        .bg_fill(egui::Color32::LIGHT_GRAY);
+                    let image =
+                        egui::Image::new(tex, frame_size * scale).bg_fill(crate::theme::PREVIEW_BG);
                     let r = ui.add(image).rect;
 
                     let r: Rect<i32> =

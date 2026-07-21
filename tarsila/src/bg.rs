@@ -1,13 +1,12 @@
 use crate::graphics::DrawContext;
+use crate::theme;
 use crate::wrapped_image::WrappedImage;
 use lapix::color::TRANSPARENT;
-use lapix::{Bitmap, Color};
+use lapix::Bitmap;
 use macroquad::prelude::*;
 
 const CHECKERED_TILE_SIZE: f32 = 64.;
 const CHECKERED_TILE_PIX_PER_SQ: f32 = 4.;
-const BG_COLOR_1: Color = Color::new(224, 224, 224, 255);
-const BG_COLOR_2: Color = Color::new(192, 192, 192, 255);
 
 pub struct Background {
     checkered_tile: Texture2D,
@@ -22,8 +21,8 @@ impl Background {
             TRANSPARENT,
         );
 
-        let bg1 = BG_COLOR_1;
-        let bg2 = BG_COLOR_2;
+        let bg1 = theme::CHECKER_1;
+        let bg2 = theme::CHECKER_2;
 
         for i in 0..(CHECKERED_TILE_SIZE as i32) {
             for j in 0..(CHECKERED_TILE_SIZE as i32) {

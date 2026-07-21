@@ -1,5 +1,4 @@
 use crate::{util, Effect, Resources};
-use egui::Color32;
 use lapix::{Event, Size, Tool};
 use macroquad::prelude::*;
 use std::collections::HashMap;
@@ -98,7 +97,8 @@ pub struct ToolButton {
 impl ToolButton {
     pub fn new(tool: Tool) -> Self {
         let bytes = Resources::tool_icon(tool);
-        let img = Image::from_file_with_format(bytes, None);
+        let mut img = Image::from_file_with_format(bytes, None);
+        crate::theme::invert_rgb(&mut img.bytes);
 
         let x = TOOL_BTN_IMG_SIZE.x;
         let y = TOOL_BTN_IMG_SIZE.y;
@@ -124,7 +124,7 @@ impl ToolButton {
         // FIXME: Ui::scope destroys the toolbar's wrapping layout, so we're forced to temporarily
         // set the style and then set back the old style manually after we're done.
         if selected {
-            ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(218, 218, 218);
+            ui.style_mut().visuals.widgets.inactive.weak_bg_fill = crate::theme::ACCENT;
         }
         if ui
             .add(egui::ImageButton::new(texture, texture.size_vec2()))

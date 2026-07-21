@@ -100,7 +100,10 @@ pub struct Cursor {
 impl Cursor {
     pub fn new(typ: CursorType, offset: Point<f32>) -> Self {
         let bytes = Resources::cursor(typ);
-        let texture = Texture2D::from_file_with_format(bytes, None);
+        let mut img = Image::from_file_with_format(bytes, None);
+        crate::theme::invert_rgb(&mut img.bytes);
+        let texture = Texture2D::from_image(&img);
+        texture.set_filter(FilterMode::Nearest);
 
         Self { texture, offset }
     }

@@ -37,34 +37,30 @@ impl StatusBar {
     pub fn update(&mut self, egui_ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("my_panel").show(egui_ctx, |ui| {
             ui.horizontal(|ui| {
-                let text_color = egui::Color32::from_rgb(0, 0, 0);
-
-                ui.colored_label(text_color, format!("{:.1} FPS", self.fps))
+                ui.label(format!("{:.1} FPS", self.fps))
                     .on_hover_text("frames per second");
                 ui.separator();
-                ui.colored_label(
-                    text_color,
-                    format!("{}x{}", self.canvas_size.x, self.canvas_size.y),
-                )
-                .on_hover_text("canvas size");
+                ui.label(format!("{}x{}", self.canvas_size.x, self.canvas_size.y))
+                    .on_hover_text("canvas size");
                 ui.separator();
-                ui.colored_label(text_color, format!("{:.0}%", self.zoom * 100.))
+                ui.label(format!("{:.0}%", self.zoom * 100.))
                     .on_hover_text("zoom level");
                 ui.separator();
-                ui.colored_label(text_color, self.selected_tool.to_string())
+                ui.label(self.selected_tool.to_string())
                     .on_hover_text("current tool");
 
                 if self.is_mouse_on_canvas {
                     ui.separator();
-                    ui.colored_label(
-                        text_color,
-                        format!("{},{}", self.mouse_canvas.x + 1, self.mouse_canvas.y + 1),
-                    )
+                    ui.label(format!(
+                        "{},{}",
+                        self.mouse_canvas.x + 1,
+                        self.mouse_canvas.y + 1
+                    ))
                     .on_hover_text("cursor position in canvas");
 
                     if let Some(color) = self.visible_pixel_on_mouse {
                         ui.separator();
-                        ui.colored_label(text_color, Color::from(color).hex())
+                        ui.label(Color::from(color).hex())
                             .on_hover_text("color under cursor");
                     }
                 }

@@ -84,32 +84,8 @@ impl Gui {
     pub fn update(&mut self) -> Vec<Effect> {
         let mut events = Vec::new();
 
-        let widget_color = egui::Color32::from_rgb(150, 150, 150);
-        let widget_weak_color = egui::Color32::from_rgb(150, 150, 150);
-        let bg_color = egui::Color32::from_rgb(175, 175, 175);
-        let bg_strong_color = egui::Color32::from_rgb(230, 230, 230);
-        let bg_weak_color = egui::Color32::from_rgb(150, 150, 150);
-        let text_color = Some(egui::Color32::from_rgb(0, 0, 0));
-
         egui_macroquad::ui(|egui_ctx| {
-            let mut visuals = egui_ctx.style().visuals.clone();
-            visuals.dark_mode = false;
-            visuals.menu_rounding = 2.0.into();
-            visuals.window_rounding = 2.0.into();
-            visuals.widgets.noninteractive.bg_fill = bg_color;
-            visuals.widgets.noninteractive.weak_bg_fill = bg_weak_color;
-            visuals.widgets.active.bg_fill = widget_color;
-            visuals.widgets.active.weak_bg_fill = widget_weak_color;
-            visuals.widgets.inactive.bg_fill = widget_color;
-            visuals.widgets.inactive.weak_bg_fill = widget_weak_color;
-            visuals.widgets.hovered.bg_fill = widget_color;
-            visuals.widgets.hovered.weak_bg_fill = widget_weak_color;
-            visuals.faint_bg_color = bg_weak_color;
-            visuals.extreme_bg_color = bg_strong_color;
-            visuals.panel_fill = bg_color;
-            visuals.window_fill = bg_color;
-            visuals.override_text_color = text_color;
-            egui_ctx.set_visuals(visuals);
+            crate::theme::apply_egui_visuals(egui_ctx);
 
             let mut palette_events = self.palette.update(egui_ctx);
             events.append(&mut palette_events);

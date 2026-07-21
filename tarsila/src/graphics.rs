@@ -9,9 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DASHED_LINE_SEGMENT: f32 = 5.;
 const DASHED_LINE_ANIMATION_MS: u128 = 250;
 const SPRSHEET_LINE_THICKNESS: f32 = 1.;
-const SPRSHEET_LINE_COLOR: MqColor = BLACK;
+const SPRSHEET_LINE_COLOR: MqColor = crate::theme::SPRITESHEET_LINE;
 const GRID_LINE_THICKNESS: f32 = 1.;
-const GRID_LINE_COLOR: MqColor = MqColor::new(0., 0., 0., 0.2);
+const GRID_LINE_COLOR: MqColor = crate::theme::GRID_LINE;
 const GRID_MIN_ZOOM: f32 = 3.;
 
 #[derive(Debug, Copy, Clone)]
