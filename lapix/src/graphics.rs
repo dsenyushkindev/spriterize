@@ -34,6 +34,33 @@ pub fn line(p1: Point<i32>, p2: Point<i32>) -> Vec<Point<i32>> {
     line
 }
 
+/// Largest brush radius that makes sense to offer. Beyond this a stamp covers
+/// most of a typical sprite in one click.
+pub const MAX_BRUSH_RADIUS: u8 = 16;
+
+/// Offsets covered by a brush of the given radius, as a filled disc.
+///
+/// Radius 0 is a single pixel, 1 a plus shape, and so on: a pixel belongs to
+/// the stamp when its centre is within `radius` of the middle, which keeps the
+/// familiar chunky circles of pixel art rather than a smooth outline. The
+/// diameter is always `2 * radius + 1`, so a stamp is symmetric around the
+/// pixel under the cursor.
+pub fn brush_offsets(radius: u8) -> Vec<Point<i32>> {
+    let radius = radius.min(MAX_BRUSH_RADIUS) as i32;
+    let limit = radius * radius;
+    let mut offsets = Vec::new();
+
+    for y in -radius..=radius {
+        for x in -radius..=radius {
+            if x * x + y * y <= limit {
+                offsets.push(Point::new(x, y));
+            }
+        }
+    }
+
+    offsets
+}
+
 /// Get the set of [`Point`]s needed to draw a rectangle between two points
 pub fn rectangle(p1: Point<i32>, p2: Point<i32>) -> Vec<Point<i32>> {
     let l1 = line((p1.x, p1.y).into(), (p1.x, p2.y).into());
@@ -110,6 +137,55 @@ mod tests {
         l.sort();
 
         assert_eq!(l, expected.into_iter().map(Into::into).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_zero_radius_brush_is_a_single_pixel() {
+        assert_eq!(brush_offsets(0), vec![Point::new(0, 0)]);
+    }
+
+    #[test]
+    fn a_radius_one_brush_is_a_plus() {
+        let mut offsets = brush_offsets(1);
+        offsets.sort();
+
+        let mut expected: Vec<Point<i32>> = vec![(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        expected.sort();
+
+        assert_eq!(offsets, expected);
+    }
+
+    #[test]
+    fn brushes_are_round_and_symmetric() {
+        for radius in 0..=6 {
+            let offsets = brush_offsets(radius);
+            let r = radius as i32;
+
+            // Every offset is within the radius, and the disc is symmetric
+            // under reflection in both axes.
+            for p in &offsets {
+                assert!(p.x * p.x + p.y * p.y <= r * r);
+                assert!(offsets.contains(&Point::new(-p.x, p.y)));
+                assert!(offsets.contains(&Point::new(p.x, -p.y)));
+            }
+
+            // Corners of the bounding box are cut off for anything but a
+            // single pixel, so the stamp reads as a circle rather than a box.
+            if radius > 0 {
+                assert!(!offsets.contains(&Point::new(r, r)));
+            }
+        }
+    }
+
+    #[test]
+    fn brush_radius_is_capped() {
+        let huge = brush_offsets(u8::MAX);
+        let capped = brush_offsets(MAX_BRUSH_RADIUS);
+
+        assert_eq!(huge.len(), capped.len());
     }
 
     #[test]

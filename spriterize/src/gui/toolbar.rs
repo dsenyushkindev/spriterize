@@ -1,5 +1,6 @@
 use crate::gui::layout::{self, PanelLayout};
 use crate::{Effect, Resources};
+use lapix::graphics::MAX_BRUSH_RADIUS;
 use lapix::{Event, Size, Tool};
 use macroquad::prelude::*;
 use std::collections::HashMap;
@@ -37,6 +38,7 @@ impl Toolbar {
         egui_ctx: &egui::Context,
         layout: &PanelLayout,
         selected_tool: Tool,
+        brush_radius: u8,
     ) -> Vec<Effect> {
         let mut events = Vec::new();
 
@@ -51,6 +53,30 @@ impl Toolbar {
                     }
                 }
             });
+
+            // Only the stamping tools use it, so it would be noise otherwise.
+            if matches!(selected_tool, Tool::Brush | Tool::Eraser) {
+                ui.separator();
+
+                let mut radius = brush_radius;
+
+                ui.horizontal(|ui| {
+                    ui.label("size:");
+                    ui.add(
+                        egui::Slider::new(&mut radius, 0..=MAX_BRUSH_RADIUS)
+                            .show_value(false)
+                            .custom_formatter(|r, _| format!("{}", 2. * r + 1.)),
+                    )
+                    .on_hover_text("brush radius");
+                    // Shown as a diameter, which is what the stamp on screen
+                    // measures across.
+                    ui.label(format!("{} px", 2 * radius as u16 + 1));
+                });
+
+                if radius != brush_radius {
+                    events.push(Event::SetBrushRadius(radius).into());
+                }
+            }
         });
 
         events

@@ -13,6 +13,9 @@ const SPRSHEET_LINE_COLOR: MqColor = crate::theme::SPRITESHEET_LINE;
 const GRID_LINE_THICKNESS: f32 = 1.;
 const GRID_LINE_COLOR: MqColor = crate::theme::GRID_LINE;
 const GRID_MIN_ZOOM: f32 = 3.;
+const BRUSH_PREVIEW_ALPHA: u8 = 110;
+const BRUSH_PREVIEW_THICKNESS: f32 = 1.;
+const BRUSH_PREVIEW_LINE: MqColor = MqColor::new(1., 1., 1., 0.5);
 
 #[derive(Debug, Copy, Clone)]
 pub struct DrawContext {
@@ -104,6 +107,17 @@ pub fn draw_selection(ctx: DrawContext, free_image: Option<&FreeImage<WrappedIma
         _ => return,
     };
 
+    draw_canvas_rect_outline(ctx, rect);
+}
+
+/// Outlines the area a selection being dragged currently covers, so its extent
+/// is visible before the mouse button is released.
+pub fn draw_selection_preview(ctx: DrawContext, rect: Rect<i32>) {
+    draw_canvas_rect_outline(ctx, rect);
+}
+
+/// Draws marching ants around a rectangle given in canvas coordinates.
+fn draw_canvas_rect_outline(ctx: DrawContext, rect: Rect<i32>) {
     let p0 = ctx.canvas_pos - ctx.camera;
     let r = Rect {
         x: (p0.x + rect.x as f32 * ctx.scale) as i32,
@@ -112,6 +126,41 @@ pub fn draw_selection(ctx: DrawContext, free_image: Option<&FreeImage<WrappedIma
         h: (rect.h as f32 * ctx.scale) as i32,
     };
     draw_animated_dashed_rect(r);
+}
+
+/// Shows which pixels the brush would cover, tinted with the color it would
+/// paint, so the size and shape of a wide brush are visible before drawing.
+pub fn draw_brush_preview(ctx: DrawContext, centre: Point<i32>, radius: u8, color: [u8; 4]) {
+    let p0 = ctx.canvas_pos - ctx.camera;
+    // Opaque enough to read against any artwork, transparent enough to see what
+    // is about to be painted over.
+    let fill: MqColor = [color[0], color[1], color[2], BRUSH_PREVIEW_ALPHA].into();
+
+    for offset in graphics::brush_offsets(radius) {
+        let p = centre + offset;
+        let x = p0.x + p.x as f32 * ctx.scale;
+        let y = p0.y + p.y as f32 * ctx.scale;
+
+        draw_rectangle(x, y, ctx.scale, ctx.scale, fill);
+    }
+
+    // A single outline around the whole stamp would need the shape's hull, so
+    // each pixel is outlined instead. At a single pixel that is exactly the
+    // familiar cursor square.
+    for offset in graphics::brush_offsets(radius) {
+        let p = centre + offset;
+        let x = p0.x + p.x as f32 * ctx.scale;
+        let y = p0.y + p.y as f32 * ctx.scale;
+
+        draw_rectangle_lines(
+            x,
+            y,
+            ctx.scale,
+            ctx.scale,
+            BRUSH_PREVIEW_THICKNESS,
+            BRUSH_PREVIEW_LINE,
+        );
+    }
 }
 
 pub fn draw_grid(ctx: DrawContext) {

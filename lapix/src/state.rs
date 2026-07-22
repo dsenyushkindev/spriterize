@@ -1,10 +1,16 @@
 use crate::color::{BLACK, TRANSPARENT};
 use crate::util::{LoadProject, SaveProject};
 use crate::{
-    util, Action, AtomicAction, Bitmap, Canvas, CanvasEffect, Color, Error, Event, FreeImage,
-    Layers, Palette, Point, Position, Rect, Result, Size, Tool,
+    graphics, util, Action, AtomicAction, Bitmap, Canvas, CanvasEffect, Color, Error, Event,
+    FreeImage, Layers, Palette, Point, Position, Rect, Result, Size, Tool,
 };
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// A single pixel, the brush size pixel art is usually drawn at.
+fn default_brush_radius() -> u8 {
+    0
+}
 
 /// Represents a selection
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +35,11 @@ pub struct State<IMG> {
     events: Vec<Event>,
     tool: Tool,
     main_color: Color,
+    /// Radius of the brush and eraser, in pixels. A tool setting rather than
+    /// part of the drawing, so it is deliberately left out of saved projects —
+    /// which also keeps the format readable by older versions.
+    #[serde(skip, default = "default_brush_radius")]
+    brush_radius: u8,
     spritesheet: Size<u8>,
     palette: Palette,
     selection: Option<Selection>,
@@ -58,6 +69,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             events: Vec::new(),
             tool: Tool::Brush,
             main_color: BLACK,
+            brush_radius: default_brush_radius(),
             spritesheet: Size::new(1, 1),
             palette: Palette::default(),
             selection: None,
@@ -192,15 +204,17 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::BrushStroke(p) => {
                 let last_event = self.events.last();
 
+                let radius = self.brush_radius;
+
                 let reversals = match last_event {
                     Some(Event::BrushStroke(p0)) => {
                         let color = self.main_color;
                         let p0 = *p0;
-                        self.canvas_mut().line(p0, p, color)
+                        self.canvas_mut().brush_line(p0, p, color, radius)
                     }
                     Some(Event::BrushStart) => {
                         let color = self.main_color;
-                        self.canvas_mut().set_pixel(p, color).into_iter().collect()
+                        self.canvas_mut().brush(p, color, radius)
                     }
                     _ => Vec::new(),
                 };
@@ -209,23 +223,25 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::Erase(p) => {
                 let last_event = self.events.last();
 
+                let radius = self.brush_radius;
+
                 let reversals = match last_event {
                     Some(Event::Erase(p0)) => {
                         let p0 = *p0;
-                        self.canvas_mut().line(p0, p, TRANSPARENT)
+                        self.canvas_mut().brush_line(p0, p, TRANSPARENT, radius)
                     }
-                    Some(Event::EraseStart) => self
-                        .canvas_mut()
-                        .set_pixel(p, TRANSPARENT)
-                        .into_iter()
-                        .collect(),
+                    Some(Event::EraseStart) => self.canvas_mut().brush(p, TRANSPARENT, radius),
                     _ => Vec::new(),
                 };
                 self.add_to_pixels_action(reversals)?;
             }
             Event::SetTool(tool) => self.tool = tool,
             Event::SetMainColor(color) => self.main_color = color,
+            Event::SetBrushRadius(radius) => {
+                self.brush_radius = radius.min(graphics::MAX_BRUSH_RADIUS)
+            }
             Event::Save(path) => self.save_image(path.to_string_lossy().as_ref())?,
+            Event::ExportLayers(path) => self.export_layers(&path)?,
             Event::OpenFile(path) => self.import_image(path.to_string_lossy().as_ref())?,
             Event::SaveProject(path) => {
                 if let Some(f) = &self.save_project_fn {
@@ -623,6 +639,76 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         let blended = self.layers.blended();
 
         util::save_image(blended, path)
+    }
+
+    /// Export every layer as its own image, numbered to match the layers panel.
+    ///
+    /// Given `sprite.png` the files are `sprite_1.png`, `sprite_2.png` and so
+    /// on, so a drawing built up as one layer per part yields those parts
+    /// separately without having to hide and export each in turn.
+    fn export_layers(&self, path: &Path) -> Result<()> {
+        let stem = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "layer".to_owned());
+        let extension = path
+            .extension()
+            .map(|ext| ext.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "png".to_owned());
+
+        for i in 0..self.layers.count() {
+            let name = format!("{stem}_{}.{extension}", i + 1);
+            let out = match path.parent() {
+                Some(dir) => dir.join(name),
+                None => PathBuf::from(name),
+            };
+
+            util::save_image(self.layer_image(i), out.to_string_lossy().as_ref())?;
+        }
+
+        Ok(())
+    }
+
+    /// The image of a single layer as it appears on screen, with the layer's
+    /// opacity baked into the alpha channel.
+    fn layer_image(&self, index: usize) -> IMG {
+        let canvas = self.layers.canvas_at(index);
+        let opacity = self.layers.get(index).opacity() as u16;
+        let mut img = IMG::new(canvas.size(), TRANSPARENT);
+
+        for i in 0..canvas.width() {
+            for j in 0..canvas.height() {
+                let p = Point::new(i, j);
+                let mut color = canvas.pixel(p);
+                color.a = (color.a as u16 * opacity / 255) as u8;
+
+                img.set_pixel(p, color);
+            }
+        }
+
+        img
+    }
+
+    /// The area a selection being dragged covers right now, with the mouse at
+    /// `mouse`. `None` when no selection is being dragged.
+    ///
+    /// Mirrors what [`Event::EndSelection`] would produce, so the outline drawn
+    /// during the drag matches the selection that results from it.
+    pub fn selection_in_progress(&self, mouse: Point<i32>) -> Option<Rect<i32>> {
+        let Some(Event::StartSelection(p0)) = self.events.last() else {
+            return None;
+        };
+
+        let size = mouse.abs_diff(*p0);
+        let corner = mouse.rect_min_corner(*p0);
+        let rect = Rect::new(corner.x, corner.y, size.x + 1, size.y + 1);
+
+        Some(rect.clip_to(self.canvas().rect()))
+    }
+
+    /// Radius of the brush and eraser, in pixels
+    pub fn brush_radius(&self) -> u8 {
+        self.brush_radius
     }
 
     fn import_image(&mut self, path: &str) -> Result<()> {

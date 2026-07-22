@@ -43,6 +43,7 @@ pub struct GuiSyncParams {
     pub recent_files: Vec<PathBuf>,
     pub current_file: Option<PathBuf>,
     pub new_project_requested: bool,
+    pub brush_radius: u8,
     pub settings: Settings,
     /// Framebuffer pixels per interface point, applied to egui each frame.
     pub ui_scale: f32,
@@ -60,6 +61,7 @@ pub struct Gui {
     layout: PanelLayout,
     mouse_on_canvas: bool,
     selected_tool: Tool,
+    brush_radius: u8,
     /// Whether egui has an animation in flight (hover fades, tooltips, the text
     /// cursor) and needs another frame to finish it.
     wants_repaint: bool,
@@ -79,6 +81,7 @@ impl Gui {
             layout: PanelLayout::new(),
             mouse_on_canvas: false,
             selected_tool: Tool::Brush,
+            brush_radius: 0,
             wants_repaint: false,
             ui_scale: 1.,
         }
@@ -106,6 +109,7 @@ impl Gui {
         self.mouse_on_canvas = params.is_on_canvas;
 
         self.selected_tool = params.selected_tool;
+        self.brush_radius = params.brush_radius;
         self.layers_panel.sync(
             params.num_layers,
             params.active_layer,
@@ -146,9 +150,12 @@ impl Gui {
             let mut palette_events = self.palette.update(egui_ctx, &self.layout);
             events.append(&mut palette_events);
 
-            let mut toolbar_events =
-                self.toolbar
-                    .update(egui_ctx, &self.layout, self.selected_tool);
+            let mut toolbar_events = self.toolbar.update(
+                egui_ctx,
+                &self.layout,
+                self.selected_tool,
+                self.brush_radius,
+            );
             events.append(&mut toolbar_events);
 
             let mut layers_events = self.layers_panel.update(egui_ctx, &self.layout);

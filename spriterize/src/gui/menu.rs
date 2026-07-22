@@ -79,6 +79,7 @@ impl MenuBar {
                         ("Save Project", "Ctrl+S", UiEvent::SaveProject),
                         ("Save Project As", "Ctrl+Shift+S", UiEvent::SaveProjectAs),
                         ("Export Image", "Ctrl+E", UiEvent::ExportImage),
+                        ("Export Layers", "Ctrl+Shift+E", UiEvent::ExportLayers),
                         ("Import Image", "Ctrl+I", UiEvent::ImportImage),
                     ] {
                         if ui

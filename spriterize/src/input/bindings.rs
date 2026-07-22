@@ -333,6 +333,15 @@ impl KeyBindings {
             (
                 vec![
                     InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyModifier(KeyboardModifier::Shift),
+                    InputEvent::KeyPress(mq::KeyCode::E.into()),
+                ]
+                .into(),
+                UiEvent::ExportLayers.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
                     InputEvent::KeyPress(mq::KeyCode::I.into()),
                 ]
                 .into(),

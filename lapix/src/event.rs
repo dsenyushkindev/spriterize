@@ -35,8 +35,13 @@ pub enum Event {
     AddToPalette(Color),
     /// Remove a color from the palette
     RemoveFromPalette(Color),
+    /// Set the radius of the brush and eraser, in pixels. Zero is a single
+    /// pixel.
+    SetBrushRadius(u8),
     /// Export the image to the defined path
     Save(PathBuf),
+    /// Export each layer as its own image, numbered after the given path
+    ExportLayers(PathBuf),
     /// Import an image from the defined path. The image will be loaded as a
     /// free image that can be moved around, and will resize the canvas if it's
     /// too big for it.

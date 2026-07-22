@@ -1,6 +1,7 @@
 use crate::color::TRANSPARENT;
 use crate::{graphics, Bitmap, Color, FreeImage, Point, Rect, Size};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// Effects that certain actions can have on the canvas
 #[derive(Debug, Clone, Copy)]
@@ -117,6 +118,61 @@ impl<IMG: Bitmap> Canvas<IMG> {
         }
 
         None
+    }
+
+    /// Stamp a brush of the given radius centred on a point. Returns a set of
+    /// reversals (points and the colors they need to be set to in order to
+    /// reverse the action).
+    pub fn brush(&mut self, p: Point<i32>, color: Color, radius: u8) -> Vec<(Point<i32>, Color)> {
+        let mut reversals = Vec::new();
+
+        for offset in graphics::brush_offsets(radius) {
+            if let Some(action) = self.set_pixel(p + offset, color) {
+                reversals.push(action);
+            }
+        }
+
+        reversals
+    }
+
+    /// Drag a brush of the given radius from one point to another, stamping
+    /// along the way. Returns a set of reversals (points and the colors they
+    /// need to be set to in order to reverse the action).
+    pub fn brush_line(
+        &mut self,
+        p1: Point<i32>,
+        p2: Point<i32>,
+        color: Color,
+        radius: u8,
+    ) -> Vec<(Point<i32>, Color)> {
+        // A single pixel brush is the common case, and going straight to `line`
+        // avoids stamping the same pixel repeatedly along the way.
+        if radius == 0 {
+            return self.line(p1, p2, color);
+        }
+
+        let offsets = graphics::brush_offsets(radius);
+        let mut painted = HashSet::new();
+        let mut reversals = Vec::new();
+
+        for centre in graphics::line(p1, p2) {
+            for offset in &offsets {
+                let p = centre + *offset;
+
+                // Consecutive stamps overlap heavily; setting a pixel twice
+                // would record a reversal back to a color from this same
+                // stroke, which would leave the undo incomplete.
+                if !painted.insert(p) {
+                    continue;
+                }
+
+                if let Some(action) = self.set_pixel(p, color) {
+                    reversals.push(action);
+                }
+            }
+        }
+
+        reversals
     }
 
     /// Draw a line between two points in the canvas with a certain color.

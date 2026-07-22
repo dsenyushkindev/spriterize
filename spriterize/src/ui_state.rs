@@ -91,6 +91,7 @@ pub enum UiEvent {
     SaveProject,
     SaveProjectAs,
     ExportImage,
+    ExportLayers,
     ImportImage,
     OpenRecent(PathBuf),
     ClearRecent,
@@ -149,6 +150,7 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             recent_files: state.recent.paths().to_vec(),
             current_file: state.current_file.clone(),
             new_project_requested: state.new_project_requested,
+            brush_radius: state.inner.brush_radius(),
             settings: state.settings.clone(),
             ui_scale: state.ui_scale(),
             dpi_scale: dpi_scale(),
@@ -389,13 +391,32 @@ impl UiState {
         dpi_scale() * self.settings.ui_scale
     }
 
+    /// Where to show the brush preview, if it should be shown at all.
+    ///
+    /// Only for the tools that stamp, and only while the pointer is over the
+    /// canvas rather than a tool window.
+    fn brush_preview_at(&self, mouse_canvas: Point<i32>) -> Option<Point<i32>> {
+        let stamps = matches!(self.selected_tool(), Tool::Brush | Tool::Eraser);
+
+        if !stamps || self.is_canvas_blocked() || !self.canvas().is_in_bounds(mouse_canvas) {
+            return None;
+        }
+
+        Some(mouse_canvas)
+    }
+
     /// Asks for another frame when something on screen is still moving.
     ///
     /// With `blocking_event_loop` the editor only redraws in response to input,
     /// so every animation has to keep itself alive. Without this the marching
     /// ants around a selection freeze, and the preview stops cycling frames.
     fn schedule_next_frame(&self) {
+        let (x, y) = macroquad::prelude::mouse_position();
+        let mouse_canvas = self.screen_to_canvas(x, y).into();
+
         let animating = self.inner.selection().is_some()
+            // Marching ants around a selection being dragged.
+            || self.inner.selection_in_progress(mouse_canvas).is_some()
             || self.inner.free_image().is_some()
             || self.spritesheet_frames() > 1;
 
@@ -492,6 +513,19 @@ impl UiState {
 
         if self.inner.selection().is_some() {
             graphics::draw_selection(ctx, self.inner.free_image());
+        }
+
+        if let Some(rect) = self.inner.selection_in_progress(mouse_canvas) {
+            graphics::draw_selection_preview(ctx, rect);
+        }
+
+        if let Some(centre) = self.brush_preview_at(mouse_canvas) {
+            graphics::draw_brush_preview(
+                ctx,
+                centre,
+                self.inner.brush_radius(),
+                self.inner.main_color().into(),
+            );
         }
 
         // TODO: most of this logic should be in some update method, not a draw one
@@ -624,6 +658,12 @@ impl UiState {
                     self.execute(Event::Save(path.clone()))?;
                     // Recorded as recent so it can be re-imported, but it isn't
                     // made current: the project is still the open document.
+                    self.recent.push(path);
+                }
+            }
+            UiEvent::ExportLayers => {
+                if let Some(path) = files::export_image(self.current_file.as_deref()) {
+                    self.execute(Event::ExportLayers(path.clone()))?;
                     self.recent.push(path);
                 }
             }

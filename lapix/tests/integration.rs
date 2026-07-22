@@ -182,6 +182,90 @@ fn cannot_undo_or_redo_on_a_fresh_state() {
 
 #[cfg(feature = "test-utils")]
 #[test]
+fn a_wider_brush_paints_a_disc() {
+    let side = 11;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+    let centre = Point::new(5, 5);
+
+    state.execute(Event::SetBrushRadius(2)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(centre)).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    for i in 0..side {
+        for j in 0..side {
+            let (dx, dy) = (i - centre.x, j - centre.y);
+            let inside = dx * dx + dy * dy <= 4;
+            let color = if inside { BLACK } else { TRANSPARENT };
+
+            assert_eq!(
+                state.canvas().pixel(Point::new(i, j)),
+                color,
+                "at {i},{j} with radius 2"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn undo_reverts_a_whole_wide_stroke() {
+    // Overlapping stamps set some pixels more than once, so this catches
+    // reversals that record a color from earlier in the same stroke.
+    let side = 12;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::SetBrushRadius(2)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(2, 2))).unwrap();
+    state.execute(Event::BrushStroke(Point::new(9, 9))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+    state.execute(Event::Undo).unwrap();
+
+    for i in 0..side {
+        for j in 0..side {
+            assert_eq!(
+                state.canvas().pixel(Point::new(i, j)),
+                TRANSPARENT,
+                "at {i},{j} after undo"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn selection_preview_matches_the_selection_it_makes() {
+    let side = 10;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+    let (from, to) = (Point::new(2, 3), Point::new(6, 8));
+
+    state.execute(Event::StartSelection(from)).unwrap();
+    let preview = state.selection_in_progress(to);
+
+    state.execute(Event::EndSelection(to)).unwrap();
+    let selection = match state.selection() {
+        Some(lapix::Selection::Canvas(rect)) => rect,
+        other => panic!("expected a canvas selection, got {other:?}"),
+    };
+
+    assert_eq!(preview, Some(selection));
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn there_is_no_selection_preview_when_nothing_is_being_dragged() {
+    let side = 10;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    assert_eq!(state.selection_in_progress(Point::new(1, 1)), None);
+
+    state.execute(Event::BrushStart).unwrap();
+    assert_eq!(state.selection_in_progress(Point::new(1, 1)), None);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
 fn bucket_then_erase() {
     let side = 10;
     let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
