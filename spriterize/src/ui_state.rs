@@ -136,6 +136,9 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             layers_alpha: (0..n_layers)
                 .map(|i| state.inner.layers().get(i).opacity())
                 .collect(),
+            layers_names: (0..n_layers)
+                .map(|i| state.inner.layers().get(i).name().to_owned())
+                .collect(),
             palette: state.inner.palette().iter().map(|c| (*c).into()).collect(),
             mouse_canvas: (x, y).into(),
             is_on_canvas: in_canvas,
@@ -662,9 +665,9 @@ impl UiState {
                 }
             }
             UiEvent::ExportLayers => {
-                if let Some(path) = files::export_image(self.current_file.as_deref()) {
-                    self.execute(Event::ExportLayers(path.clone()))?;
-                    self.recent.push(path);
+                // A directory, not a file: each layer is named after itself.
+                if let Some(dir) = files::export_layers_dir(self.current_file.as_deref()) {
+                    self.execute(Event::ExportLayers(dir))?;
                 }
             }
             UiEvent::ImportImage => {

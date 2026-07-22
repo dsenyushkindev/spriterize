@@ -17,6 +17,13 @@ pub const PREVIEW: &str = "Preview";
 /// The windows stacked down the left edge, in order.
 const COLUMN: [&str; 3] = [PALETTE, TOOLBOX, LAYERS];
 
+/// Width the stacked tool windows are laid out to, so they line up as a column
+/// of equal-width panels. Individual widgets can still be narrower than this.
+///
+/// Wide enough for a row of the layers table, which is the panel with the most
+/// in it. Shortening its column headings would let this come down.
+pub const PANEL_WIDTH: f32 = 330.;
+
 const MARGIN: f32 = 15.;
 const GAP: f32 = 10.;
 
@@ -88,6 +95,15 @@ impl PanelLayout {
         add: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
         let window = egui::Window::new(title);
+        // Only the stacked column shares a width; the preview is sized by the
+        // sprite it shows. Applied to the window rather than its contents:
+        // `Ui::set_min_width` widens the content region but doesn't reliably
+        // widen the window around it.
+        let window = if COLUMN.contains(&title) {
+            window.min_width(PANEL_WIDTH)
+        } else {
+            window
+        };
         let window = match self.positions.get(title) {
             // Forced while arranging, so the window moves to where it has been
             // stacked; only a starting point afterwards, so it stays draggable.

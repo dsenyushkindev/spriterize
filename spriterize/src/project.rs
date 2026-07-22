@@ -1,7 +1,15 @@
 use crate::VERSION;
 use std::path::PathBuf;
 
-const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xee];
+/// Identifies a project file, and with it the layout of the data that follows.
+///
+/// The project is stored with bincode, which records no field names or types,
+/// so any change to the saved structures makes older files unreadable. Bumping
+/// the last byte on such a change means those files fail to load outright
+/// rather than being read as nonsense.
+///
+/// - `..0xee`: before layers had names.
+const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xef];
 
 pub fn save(path: PathBuf, bytes: Vec<u8>) {
     use std::io::Write;

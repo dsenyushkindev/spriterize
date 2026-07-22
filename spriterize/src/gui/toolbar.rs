@@ -44,7 +44,7 @@ impl Toolbar {
 
         layout.show(egui_ctx, layout::TOOLBOX, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(160.);
+                ui.set_max_width(layout::PANEL_WIDTH);
                 for tool in TOOLS {
                     if let Some(btn) = self.get_mut(tool) {
                         btn.add_to_ui(ui, selected_tool == tool, || {

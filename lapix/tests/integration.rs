@@ -266,6 +266,47 @@ fn there_is_no_selection_preview_when_nothing_is_being_dragged() {
 
 #[cfg(feature = "test-utils")]
 #[test]
+fn layers_start_with_distinct_default_names() {
+    let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
+
+    state.execute(Event::NewLayerAbove).unwrap();
+    state.execute(Event::NewLayerAbove).unwrap();
+
+    let names: Vec<&str> = (0..state.layers().count())
+        .map(|i| state.layers().get(i).name())
+        .collect();
+
+    assert_eq!(names, vec!["Layer 1", "Layer 2", "Layer 3"]);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_new_layer_avoids_a_name_already_in_use() {
+    let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
+
+    // Rename the first layer to what the second would be called by default.
+    state
+        .execute(Event::RenameLayer(0, "Layer 2".to_owned()))
+        .unwrap();
+    state.execute(Event::NewLayerAbove).unwrap();
+
+    assert_eq!(state.layers().get(1).name(), "Layer 1");
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn layers_can_be_renamed() {
+    let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
+
+    state
+        .execute(Event::RenameLayer(0, "head".to_owned()))
+        .unwrap();
+
+    assert_eq!(state.layers().get(0).name(), "head");
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
 fn bucket_then_erase() {
     let side = 10;
     let mut state = State::<TestImage>::new(Size::new(side, side), None, None);

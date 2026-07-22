@@ -5,11 +5,60 @@ use crate::{
     FreeImage, Layers, Palette, Point, Position, Rect, Result, Size, Tool,
 };
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::Path;
 
 /// A single pixel, the brush size pixel art is usually drawn at.
 fn default_brush_radius() -> u8 {
     0
+}
+
+/// Characters that can't appear in a file name on Windows, and are worth
+/// avoiding elsewhere too.
+const RESERVED_CHARS: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+/// Turns a layer name into something safe to use as a file name, falling back
+/// to the layer's position when nothing usable is left.
+fn file_name_from(layer_name: &str, index: usize) -> String {
+    let cleaned: String = layer_name
+        .chars()
+        .map(|c| {
+            if RESERVED_CHARS.contains(&c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+
+    // Windows also refuses names ending in a dot or a space.
+    let cleaned = cleaned.trim().trim_end_matches('.').trim();
+
+    if cleaned.is_empty() {
+        format!("layer_{}", index + 1)
+    } else {
+        cleaned.to_owned()
+    }
+}
+
+/// Keeps exported file names distinct, so two layers sharing a name don't
+/// silently overwrite each other.
+fn unique_file_name(taken: &mut HashSet<String>, layer_name: &str, index: usize) -> String {
+    let base = file_name_from(layer_name, index);
+
+    if taken.insert(base.to_lowercase()) {
+        return base;
+    }
+
+    for suffix in 2.. {
+        let candidate = format!("{base}_{suffix}");
+
+        if taken.insert(candidate.to_lowercase()) {
+            return candidate;
+        }
+    }
+
+    unreachable!("a free name is always found")
 }
 
 /// Represents a selection
@@ -385,6 +434,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::SwitchLayer(i) => self.layers.switch_to(i),
             Event::ChangeLayerVisibility(i, visible) => self.layers.set_visibility(i, visible),
             Event::ChangeLayerOpacity(i, alpha) => self.layers.set_opacity(i, alpha),
+            Event::RenameLayer(i, name) => self.layers.set_name(i, name),
             // TODO: this should not only remove it, as we need to be able to
             // undo this
             Event::DeleteLayer(i) => {
@@ -641,27 +691,17 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         util::save_image(blended, path)
     }
 
-    /// Export every layer as its own image, numbered to match the layers panel.
+    /// Export every layer into a directory as its own PNG, named after the
+    /// layer.
     ///
-    /// Given `sprite.png` the files are `sprite_1.png`, `sprite_2.png` and so
-    /// on, so a drawing built up as one layer per part yields those parts
-    /// separately without having to hide and export each in turn.
-    fn export_layers(&self, path: &Path) -> Result<()> {
-        let stem = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "layer".to_owned());
-        let extension = path
-            .extension()
-            .map(|ext| ext.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "png".to_owned());
+    /// A drawing built up as one layer per part yields those parts separately
+    /// this way, without having to hide and export each in turn.
+    fn export_layers(&self, dir: &Path) -> Result<()> {
+        let mut taken = HashSet::new();
 
         for i in 0..self.layers.count() {
-            let name = format!("{stem}_{}.{extension}", i + 1);
-            let out = match path.parent() {
-                Some(dir) => dir.join(name),
-                None => PathBuf::from(name),
-            };
+            let name = unique_file_name(&mut taken, self.layers.get(i).name(), i);
+            let out = dir.join(format!("{name}.png"));
 
             util::save_image(self.layer_image(i), out.to_string_lossy().as_ref())?;
         }
@@ -726,5 +766,57 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         self.set_selection(Some(Selection::FreeImage))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_usable_layer_names_as_they_are() {
+        assert_eq!(file_name_from("Head", 0), "Head");
+        assert_eq!(file_name_from("left arm", 0), "left arm");
+        assert_eq!(file_name_from("arm-02", 0), "arm-02");
+    }
+
+    #[test]
+    fn replaces_characters_a_file_name_cannot_hold() {
+        assert_eq!(file_name_from("torso/legs", 0), "torso_legs");
+        assert_eq!(file_name_from("a:b*c?d", 0), "a_b_c_d");
+        assert_eq!(file_name_from("q\"w<e>r|t\\y", 0), "q_w_e_r_t_y");
+    }
+
+    #[test]
+    fn falls_back_to_the_layer_position_when_nothing_usable_is_left() {
+        assert_eq!(file_name_from("", 0), "layer_1");
+        assert_eq!(file_name_from("   ", 4), "layer_5");
+        assert_eq!(file_name_from("...", 1), "layer_2");
+    }
+
+    #[test]
+    fn trims_trailing_dots_and_spaces_windows_rejects() {
+        assert_eq!(file_name_from("  head  ", 0), "head");
+        assert_eq!(file_name_from("head.", 0), "head");
+    }
+
+    #[test]
+    fn distinguishes_layers_that_share_a_name() {
+        let mut taken = HashSet::new();
+
+        assert_eq!(unique_file_name(&mut taken, "arm", 0), "arm");
+        assert_eq!(unique_file_name(&mut taken, "arm", 1), "arm_2");
+        assert_eq!(unique_file_name(&mut taken, "arm", 2), "arm_3");
+        assert_eq!(unique_file_name(&mut taken, "leg", 3), "leg");
+    }
+
+    #[test]
+    fn treats_names_differing_only_in_case_as_the_same_file() {
+        // Windows and macOS file systems are usually case insensitive, so
+        // these would otherwise overwrite one another.
+        let mut taken = HashSet::new();
+
+        assert_eq!(unique_file_name(&mut taken, "Arm", 0), "Arm");
+        assert_eq!(unique_file_name(&mut taken, "arm", 1), "arm_2");
     }
 }

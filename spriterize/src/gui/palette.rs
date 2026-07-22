@@ -9,6 +9,8 @@ use macroquad::prelude::Image as MqImage;
 const BTN_SIZE: i32 = 20;
 /// Width of the color picker's bars and square. egui's default slider width is
 /// meant for popups and is too cramped for a picker that's always on screen.
+/// Independent of the panel width, so the picker keeps its proportions when the
+/// panels are made wider or narrower.
 const PICKER_WIDTH: f32 = 200.;
 
 pub struct Palette {
@@ -147,7 +149,7 @@ impl Palette {
                 });
 
                 ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(PICKER_WIDTH);
+                    ui.set_max_width(layout::PANEL_WIDTH);
                     ui.spacing_mut().item_spacing = egui::vec2(0., 0.);
                     ui.spacing_mut().button_padding = egui::vec2(1., 1.);
 

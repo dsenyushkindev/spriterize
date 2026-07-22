@@ -29,6 +29,7 @@ pub struct GuiSyncParams {
     pub active_layer: usize,
     pub layers_vis: Vec<bool>,
     pub layers_alpha: Vec<u8>,
+    pub layers_names: Vec<String>,
     pub palette: Vec<[u8; 4]>,
     pub mouse_canvas: Position<i32>,
     pub is_on_canvas: bool,
@@ -115,6 +116,7 @@ impl Gui {
             params.active_layer,
             params.layers_vis.clone(),
             params.layers_alpha.clone(),
+            params.layers_names.clone(),
         );
         self.preview.sync(
             params.spritesheet,

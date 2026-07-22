@@ -2,6 +2,11 @@ use crate::color::TRANSPARENT;
 use crate::{Bitmap, Canvas, Color, Point, Rect, Size};
 use serde::{Deserialize, Serialize};
 
+/// Name given to the nth layer when one is created without the user naming it.
+fn default_layer_name(n: usize) -> String {
+    format!("Layer {n}")
+}
+
 /// An ordered collection of [`Layer`]s. There is always one active layer.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Layers<IMG> {
@@ -13,7 +18,7 @@ impl<IMG: Bitmap> Layers<IMG> {
     /// Creates a new set of layers
     pub fn new(size: Size<i32>) -> Self {
         Self {
-            inner: vec![Layer::new(size)],
+            inner: vec![Layer::new(size, default_layer_name(1))],
             active: 0,
         }
     }
@@ -106,8 +111,22 @@ impl<IMG: Bitmap> Layers<IMG> {
 
     /// Add a new [`Layer`] above all layers
     pub fn add_new_above(&mut self) {
-        let layer = Layer::new(self.active_canvas().size());
+        let layer = Layer::new(self.active_canvas().size(), self.unused_default_name());
         self.inner.push(layer);
+    }
+
+    /// Rename the [`Layer`] at the specified index
+    pub fn set_name(&mut self, index: usize, name: impl Into<String>) {
+        self.inner[index].set_name(name);
+    }
+
+    /// The lowest numbered default name no layer is using, so adding layers
+    /// after deleting some doesn't produce two with the same name.
+    fn unused_default_name(&self) -> String {
+        (1..)
+            .map(default_layer_name)
+            .find(|name| !self.inner.iter().any(|layer| layer.name() == name))
+            .expect("there is always an unused name")
     }
 
     /// Add a new [`Layer`] at the specified index
@@ -177,16 +196,30 @@ pub struct Layer<IMG> {
     canvas: Canvas<IMG>,
     visible: bool,
     opacity: u8,
+    /// What the user calls this layer. Also the file name it gets when layers
+    /// are exported separately.
+    name: String,
 }
 
 impl<IMG: Bitmap> Layer<IMG> {
-    /// Create a new layer with a specified size
-    pub fn new(size: Size<i32>) -> Self {
+    /// Create a new layer with a specified size and name
+    pub fn new(size: Size<i32>, name: impl Into<String>) -> Self {
         Self {
             canvas: Canvas::new(size),
             visible: true,
             opacity: 255,
+            name: name.into(),
         }
+    }
+
+    /// The name of this layer
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Rename this layer
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
     }
 
     /// Get the [`Canvas`] of this layer

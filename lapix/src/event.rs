@@ -40,7 +40,8 @@ pub enum Event {
     SetBrushRadius(u8),
     /// Export the image to the defined path
     Save(PathBuf),
-    /// Export each layer as its own image, numbered after the given path
+    /// Export each layer into the given directory as its own PNG, named after
+    /// the layer
     ExportLayers(PathBuf),
     /// Import an image from the defined path. The image will be loaded as a
     /// free image that can be moved around, and will resize the canvas if it's
@@ -94,6 +95,8 @@ pub enum Event {
     ChangeLayerOpacity(usize, u8),
     /// Delete layer at index
     DeleteLayer(usize),
+    /// Rename the layer at index
+    RenameLayer(usize, String),
     /// Move the layer at specified index down (swap positions with the layer
     /// below it)
     MoveLayerDown(usize),

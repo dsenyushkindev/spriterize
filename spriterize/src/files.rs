@@ -53,6 +53,12 @@ pub fn export_image(near: Option<&Path>) -> Option<PathBuf> {
         .save_file()
 }
 
+/// Picks the directory to write one image per layer into. Layers are named
+/// individually, so there is no file name to choose.
+pub fn export_layers_dir(near: Option<&Path>) -> Option<PathBuf> {
+    dialog(near).pick_folder()
+}
+
 pub fn import_image(near: Option<&Path>) -> Option<PathBuf> {
     dialog(near)
         .add_filter("Images", &["png", "jpg", "jpeg"])
