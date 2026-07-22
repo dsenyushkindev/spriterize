@@ -190,6 +190,10 @@ pub struct UiState {
     /// Set by the New Project shortcut, and consumed by the menu on the next
     /// frame to raise its confirmation window.
     new_project_requested: bool,
+    /// Where a line, rectangle or ellipse being dragged started. Kept here
+    /// because constraining the shape with shift needs the anchor as well as
+    /// the cursor.
+    shape_start: Option<Point<i32>>,
 }
 
 impl Default for UiState {
@@ -233,6 +237,7 @@ impl Default for UiState {
             current_file: None,
             recent: RecentFiles::load(),
             new_project_requested: false,
+            shape_start: None,
         }
     }
 }
@@ -394,12 +399,44 @@ impl UiState {
         dpi_scale() * self.settings.ui_scale
     }
 
+    /// Applies the shift constraint to a shape being dragged: lines snap to the
+    /// nearest 45 degree direction, rectangles and ellipses become squares and
+    /// circles. Leaves the point alone when shift isn't held or no shape is
+    /// being dragged.
+    fn constrained(&self, p: Point<i32>) -> Point<i32> {
+        use macroquad::prelude::{is_key_down, KeyCode};
+
+        let Some(start) = self.shape_start else {
+            return p;
+        };
+
+        if !is_key_down(KeyCode::LeftShift) && !is_key_down(KeyCode::RightShift) {
+            return p;
+        }
+
+        match self.selected_tool() {
+            Tool::Line => lapix::graphics::snap_to_direction(start, p),
+            Tool::Rectangle | Tool::Ellipse => lapix::graphics::snap_to_square(start, p),
+            _ => p,
+        }
+    }
+
     /// Where to show the brush preview, if it should be shown at all.
     ///
     /// Only for the tools that stamp, and only while the pointer is over the
     /// canvas rather than a tool window.
     fn brush_preview_at(&self, mouse_canvas: Point<i32>) -> Option<Point<i32>> {
-        let stamps = matches!(self.selected_tool(), Tool::Brush | Tool::Eraser);
+        // The line tool is included because a line is that dot stretched along
+        // the drag, so the dot says what the stroke will look like. A rectangle
+        // or ellipse can't be read off a single dot, so they are left out.
+        //
+        // Once a line is being dragged its own preview shows the whole stroke,
+        // and the dot would only be in the way.
+        let stamps = match self.selected_tool() {
+            Tool::Brush | Tool::Eraser => true,
+            Tool::Line => self.shape_start.is_none(),
+            _ => false,
+        };
 
         if !stamps || self.is_canvas_blocked() || !self.canvas().is_in_bounds(mouse_canvas) {
             return None;
@@ -512,7 +549,8 @@ impl UiState {
         let mouse_canvas = self.screen_to_canvas(x, y).into();
 
         // TODO should be in update method
-        self.inner.update_free_image(mouse_canvas)?;
+        self.inner
+            .update_free_image(self.constrained(mouse_canvas))?;
 
         if self.inner.selection().is_some() {
             graphics::draw_selection(ctx, self.inner.free_image());
@@ -693,24 +731,39 @@ impl UiState {
             }
             // TODO: this used to be in mouse.rs, now it's cluttering this
             // module, we should move it somewhere else
-            UiEvent::ToolStart => match (self.selected_tool(), self.is_canvas_blocked()) {
-                (Tool::Brush, false) => self.execute(Event::BrushStart)?,
-                (Tool::Eraser, false) => self.execute(Event::EraseStart)?,
-                (Tool::Line, false) => self.execute(Event::LineStart(p))?,
-                (Tool::Rectangle, false) => self.execute(Event::RectStart(p))?,
-                (Tool::Ellipse, false) => self.execute(Event::EllipseStart(p))?,
-                (Tool::Bucket, false) => self.execute(Event::Bucket(p))?,
-                (Tool::Selection, false) => self.execute(Event::StartSelection(p))?,
-                (Tool::Move, false) => self.execute(Event::MoveStart(p))?,
-                (Tool::Eyedropper, false) => {
-                    if self.canvas().is_in_bounds(p) {
-                        let color = self.visible_pixel(p);
-                        self.execute(Event::SetMainColor(color.into()))?;
-                        self.execute(Event::SetTool(Tool::Brush))?;
+            UiEvent::ToolStart => {
+                // Anything left over from a drag that was abandoned, by
+                // switching tools part way through it, say.
+                self.shape_start = None;
+
+                match (self.selected_tool(), self.is_canvas_blocked()) {
+                    (Tool::Brush, false) => self.execute(Event::BrushStart)?,
+                    (Tool::Eraser, false) => self.execute(Event::EraseStart)?,
+                    (Tool::Line, false) => {
+                        self.shape_start = Some(p);
+                        self.execute(Event::LineStart(p))?
                     }
+                    (Tool::Rectangle, false) => {
+                        self.shape_start = Some(p);
+                        self.execute(Event::RectStart(p))?
+                    }
+                    (Tool::Ellipse, false) => {
+                        self.shape_start = Some(p);
+                        self.execute(Event::EllipseStart(p))?
+                    }
+                    (Tool::Bucket, false) => self.execute(Event::Bucket(p))?,
+                    (Tool::Selection, false) => self.execute(Event::StartSelection(p))?,
+                    (Tool::Move, false) => self.execute(Event::MoveStart(p))?,
+                    (Tool::Eyedropper, false) => {
+                        if self.canvas().is_in_bounds(p) {
+                            let color = self.visible_pixel(p);
+                            self.execute(Event::SetMainColor(color.into()))?;
+                            self.execute(Event::SetTool(Tool::Brush))?;
+                        }
+                    }
+                    _ => (),
                 }
-                _ => (),
-            },
+            }
             UiEvent::ToolStroke => match (self.selected_tool(), self.is_canvas_blocked()) {
                 (Tool::Brush, false) => self.execute(Event::BrushStroke(p))?,
                 (Tool::Eraser, false) => self.execute(Event::Erase(p))?,
@@ -719,9 +772,23 @@ impl UiState {
             UiEvent::ToolEnd => match (self.selected_tool(), self.is_canvas_blocked()) {
                 (Tool::Brush, false) => self.execute(Event::BrushEnd)?,
                 (Tool::Eraser, false) => self.execute(Event::EraseEnd)?,
-                (Tool::Line, false) => self.execute(Event::LineEnd(p))?,
-                (Tool::Rectangle, false) => self.execute(Event::RectEnd(p))?,
-                (Tool::Ellipse, false) => self.execute(Event::EllipseEnd(p))?,
+                // Constrained before the shape is committed, so it lands exactly
+                // where the preview showed it.
+                (Tool::Line, false) => {
+                    let end = self.constrained(p);
+                    self.shape_start = None;
+                    self.execute(Event::LineEnd(end))?
+                }
+                (Tool::Rectangle, false) => {
+                    let end = self.constrained(p);
+                    self.shape_start = None;
+                    self.execute(Event::RectEnd(end))?
+                }
+                (Tool::Ellipse, false) => {
+                    let end = self.constrained(p);
+                    self.shape_start = None;
+                    self.execute(Event::EllipseEnd(end))?
+                }
                 (Tool::Selection, false) => {
                     self.execute(Event::EndSelection(p))?;
                     self.execute(Event::SetTool(Tool::Move))?;

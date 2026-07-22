@@ -213,6 +213,36 @@ impl KeyBindings {
                 InputEvent::MouseButtonRelease(mq::MouseButton::Left.into()).into(),
                 UiEvent::ToolEnd.into(),
             ),
+            // DRAWING WITH SHIFT HELD
+            //
+            // Shift constrains the shape tools, and a binding only matches when
+            // its modifiers match exactly, so the drawing actions need a second
+            // set for while it is down. Without these, holding shift would stop
+            // drawing altogether rather than constraining it.
+            (
+                vec![
+                    InputEvent::MouseButtonPress(mq::MouseButton::Left.into()),
+                    InputEvent::KeyModifier(KeyboardModifier::Shift),
+                ]
+                .into(),
+                UiEvent::ToolStart.into(),
+            ),
+            (
+                vec![
+                    InputEvent::MouseButtonDown(mq::MouseButton::Left.into()),
+                    InputEvent::KeyModifier(KeyboardModifier::Shift),
+                ]
+                .into(),
+                UiEvent::ToolStroke.into(),
+            ),
+            (
+                vec![
+                    InputEvent::MouseButtonRelease(mq::MouseButton::Left.into()),
+                    InputEvent::KeyModifier(KeyboardModifier::Shift),
+                ]
+                .into(),
+                UiEvent::ToolEnd.into(),
+            ),
             // CROSSHAIR CURSOR
             (
                 InputEvent::KeyPress(mq::KeyCode::C.into()).into(),

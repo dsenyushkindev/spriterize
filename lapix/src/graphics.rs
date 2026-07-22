@@ -61,6 +61,42 @@ pub fn brush_offsets(radius: u8) -> Vec<Point<i32>> {
     offsets
 }
 
+/// Moves `p` onto the nearest of the eight directions 45 degrees apart from
+/// `p0`: the four axes and the four diagonals.
+///
+/// The angle of the drag is rounded to the nearest step, then the cursor is
+/// projected onto that ray, so the end of the line slides along the direction
+/// rather than jumping to a fixed length. A diagonal comes out at exactly 45
+/// degrees, which is what makes it a clean staircase in pixels.
+pub fn snap_to_direction(p0: Point<i32>, p: Point<i32>) -> Point<i32> {
+    const STEP: f32 = std::f32::consts::FRAC_PI_4;
+
+    let (dx, dy) = ((p.x - p0.x) as f32, (p.y - p0.y) as f32);
+    let angle = (dy.atan2(dx) / STEP).round() * STEP;
+    let (cos, sin) = (angle.cos(), angle.sin());
+    // Distance along the chosen ray, never behind its start.
+    let reach = (dx * cos + dy * sin).max(0.);
+
+    Point::new(
+        p0.x + (reach * cos).round() as i32,
+        p0.y + (reach * sin).round() as i32,
+    )
+}
+
+/// Moves `p` so the box it forms with `p0` is square, keeping the direction of
+/// the drag. Turns the rectangle tool into a square and the ellipse into a
+/// circle.
+pub fn snap_to_square(p0: Point<i32>, p: Point<i32>) -> Point<i32> {
+    let (dx, dy) = (p.x - p0.x, p.y - p0.y);
+    // The longer side wins, so the shape always covers the drag.
+    let side = dx.abs().max(dy.abs());
+    // A drag straight along an axis has no sign to preserve on the other one,
+    // so it grows right and down.
+    let sign = |d: i32| if d < 0 { -1 } else { 1 };
+
+    Point::new(p0.x + side * sign(dx), p0.y + side * sign(dy))
+}
+
 /// Widens a set of [`Point`]s by stamping a brush of the given radius over each
 /// of them, so a one pixel outline becomes a thick one.
 ///
@@ -204,6 +240,67 @@ mod tests {
             // single pixel, so the stamp reads as a circle rather than a box.
             if radius > 0 {
                 assert!(!offsets.contains(&Point::new(r, r)));
+            }
+        }
+    }
+
+    #[test_case((10, 10), (20, 11) => (20, 10) ; "shallow drag flattens to horizontal")]
+    #[test_case((10, 10), (11, 20) => (10, 20) ; "steep drag straightens to vertical")]
+    #[test_case((10, 10), (0, 11) => (0, 10) ; "horizontal works leftwards")]
+    #[test_case((10, 10), (11, 0) => (10, 0) ; "vertical works upwards")]
+    // Kept off a half pixel projection, where rounding could fall either way.
+    #[test_case((10, 10), (20, 16) => (18, 18) ; "near diagonal snaps to exactly 45 degrees")]
+    #[test_case((10, 10), (0, 20) => (0, 20) ; "diagonals work in every quadrant")]
+    #[test_case((10, 10), (10, 10) => (10, 10) ; "no drag stays put")]
+    fn snapped_direction(p0: (i32, i32), p: (i32, i32)) -> (i32, i32) {
+        let snapped = snap_to_direction(p0.into(), p.into());
+
+        (snapped.x, snapped.y)
+    }
+
+    #[test]
+    fn snapped_diagonals_are_exactly_45_degrees() {
+        let p0 = Point::new(8, 8);
+
+        for x in -20..=20 {
+            for y in -20..=20 {
+                let snapped = snap_to_direction(p0, Point::new(p0.x + x, p0.y + y));
+                let (dx, dy) = ((snapped.x - p0.x).abs(), (snapped.y - p0.y).abs());
+
+                // Every result lies on an axis or on a perfect diagonal.
+                assert!(
+                    dx == 0 || dy == 0 || dx == dy,
+                    "({x}, {y}) snapped to ({dx}, {dy}), which is neither"
+                );
+            }
+        }
+    }
+
+    #[test_case((5, 5), (15, 8) => (15, 15) ; "grows the short side to match")]
+    #[test_case((5, 5), (8, 15) => (15, 15) ; "works whichever side is longer")]
+    #[test_case((5, 5), (0, 3) => (0, 0) ; "keeps the direction of the drag")]
+    #[test_case((5, 5), (2, 9) => (1, 9) ; "handles mixed directions")]
+    #[test_case((5, 5), (5, 12) => (12, 12) ; "an axis drag grows right and down")]
+    #[test_case((5, 5), (5, 5) => (5, 5) ; "no drag stays put")]
+    fn snapped_square(p0: (i32, i32), p: (i32, i32)) -> (i32, i32) {
+        let snapped = snap_to_square(p0.into(), p.into());
+
+        (snapped.x, snapped.y)
+    }
+
+    #[test]
+    fn snapped_squares_have_equal_sides() {
+        let p0 = Point::new(9, 9);
+
+        for x in -15..=15 {
+            for y in -15..=15 {
+                let snapped = snap_to_square(p0, Point::new(p0.x + x, p0.y + y));
+
+                assert_eq!(
+                    (snapped.x - p0.x).abs(),
+                    (snapped.y - p0.y).abs(),
+                    "({x}, {y}) did not come out square"
+                );
             }
         }
     }
