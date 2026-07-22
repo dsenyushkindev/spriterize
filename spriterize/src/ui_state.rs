@@ -10,7 +10,10 @@ use crate::settings::{Settings, MAX_UI_SCALE, MIN_UI_SCALE};
 use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
 use lapix::primitives::*;
-use lapix::{Canvas, CanvasEffect, Event, Layer, LoadProject, SaveProject, Selection, State, Tool};
+use lapix::{
+    Canvas, CanvasEffect, Event, ExportOptions, Layer, LoadProject, SaveProject, Selection, State,
+    Tool,
+};
 use macroquad::prelude::Color as MqColor;
 use macroquad::prelude::{FilterMode, Texture2D};
 use std::default::Default;
@@ -91,14 +94,17 @@ pub enum UiEvent {
     OpenProject,
     SaveProject,
     SaveProjectAs,
+    /// Ask the menu to put up the export options for the flattened image
     ExportImage,
-    /// Ask the menu to put up the export options
+    /// The flattened image, reshaped by the given options
+    ExportImageAs(ExportOptions),
+    /// Ask the menu to put up the export options for the layers
     ExportLayers,
     /// One image per layer, into a folder
-    ExportLayersSeparately,
+    ExportLayersSeparately(ExportOptions),
     /// All the layers tiled into one image, the given number of cells across
     /// and down
-    ExportLayerSheet(u8, u8),
+    ExportLayerSheet(u8, u8, ExportOptions),
     ImportImage,
     OpenRecent(PathBuf),
     ClearRecent,
@@ -168,6 +174,7 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             current_file: state.current_file.clone(),
             new_project_requested: state.new_project_requested,
             export_layers_requested: state.export_layers_requested,
+            export_image_requested: state.export_image_requested,
             brush_radius: state.inner.brush_radius(),
             settings: state.settings.clone(),
             ui_scale: state.ui_scale(),
@@ -213,6 +220,9 @@ pub struct UiState {
     /// Set by the Export Layers shortcut, and consumed by the menu on the next
     /// frame to raise its options window.
     export_layers_requested: bool,
+    /// Set by the Export Image shortcut, and consumed by the menu on the next
+    /// frame to raise its options window.
+    export_image_requested: bool,
     /// Where a line, rectangle or ellipse being dragged started. Kept here
     /// because constraining the shape with shift needs the anchor as well as
     /// the cursor.
@@ -261,6 +271,7 @@ impl Default for UiState {
             recent: RecentFiles::load(),
             new_project_requested: false,
             export_layers_requested: false,
+            export_image_requested: false,
             shape_start: None,
         }
     }
@@ -293,6 +304,7 @@ impl UiState {
         // raised again on the following frames.
         self.new_project_requested = false;
         self.export_layers_requested = false;
+        self.export_image_requested = false;
         let fx = self.gui.update();
         self.process_fx(fx)?;
 
@@ -725,24 +737,29 @@ impl UiState {
                 }
             }
             UiEvent::SaveProjectAs => self.save_project_as()?,
-            UiEvent::ExportImage => {
+            UiEvent::ExportImage => self.export_image_requested = true,
+            UiEvent::ExportImageAs(options) => {
                 if let Some(path) = files::export_image(self.current_file.as_deref()) {
-                    self.execute(Event::Save(path.clone()))?;
+                    self.execute(Event::Save(path.clone(), options))?;
                     // Recorded as recent so it can be re-imported, but it isn't
                     // made current: the project is still the open document.
                     self.recent.push(path);
                 }
             }
             UiEvent::ExportLayers => self.export_layers_requested = true,
-            UiEvent::ExportLayersSeparately => {
+            UiEvent::ExportLayersSeparately(options) => {
                 // A directory, not a file: each layer is named after itself.
                 if let Some(dir) = files::export_layers_dir(self.current_file.as_deref()) {
-                    self.execute(Event::ExportLayers(dir))?;
+                    self.execute(Event::ExportLayers(dir, options))?;
                 }
             }
-            UiEvent::ExportLayerSheet(cols, rows) => {
+            UiEvent::ExportLayerSheet(cols, rows, options) => {
                 if let Some(path) = files::export_image(self.current_file.as_deref()) {
-                    self.execute(Event::ExportLayerSheet(path.clone(), (cols, rows).into()))?;
+                    self.execute(Event::ExportLayerSheet(
+                        path.clone(),
+                        (cols, rows).into(),
+                        options,
+                    ))?;
                     self.recent.push(path);
                 }
             }

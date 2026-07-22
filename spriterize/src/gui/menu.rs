@@ -1,3 +1,4 @@
+use crate::gui::export::ExportSettings;
 use crate::{Effect, UiEvent};
 use lapix::{Event, Size, Transform};
 use std::path::PathBuf;
@@ -16,6 +17,9 @@ pub struct MenuBar {
     can_redo: bool,
     filters_enabled: bool,
     show_export_layers_window: bool,
+    show_export_image_window: bool,
+    export_settings: ExportSettings,
+    canvas_size_for_export: Size<i32>,
     /// Whether the export window is offering a sheet rather than one file per
     /// layer.
     export_as_sheet: bool,
@@ -41,6 +45,9 @@ impl MenuBar {
             can_redo: false,
             filters_enabled: true,
             show_export_layers_window: false,
+            show_export_image_window: false,
+            export_settings: ExportSettings::new(),
+            canvas_size_for_export: Size::ZERO,
             export_as_sheet: false,
             sheet_str: ("1".to_owned(), "1".to_owned()),
             num_layers: 1,
@@ -57,6 +64,7 @@ impl MenuBar {
         recent_files: Vec<PathBuf>,
         new_project_requested: bool,
         export_layers_requested: bool,
+        export_image_requested: bool,
         num_layers: usize,
         filters_enabled: bool,
     ) {
@@ -67,6 +75,11 @@ impl MenuBar {
         self.recent_files = recent_files;
         self.filters_enabled = filters_enabled;
         self.num_layers = num_layers;
+        self.canvas_size_for_export = canvas_size;
+
+        if export_image_requested {
+            self.show_export_image_window = true;
+        }
 
         if export_layers_requested {
             // Start from a grid that fits: a single row of everything.
@@ -88,6 +101,7 @@ impl MenuBar {
         events.append(&mut self.update_confirm_exit_window(egui_ctx));
         events.append(&mut self.update_confirm_new_window(egui_ctx));
         events.append(&mut self.update_export_layers_window(egui_ctx));
+        events.append(&mut self.update_export_image_window(egui_ctx));
         events
     }
 
@@ -329,6 +343,60 @@ impl MenuBar {
         events
     }
 
+    /// Asks how the flattened image should come out.
+    fn update_export_image_window(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
+        let mut events = Vec::new();
+
+        if !self.show_export_image_window {
+            return events;
+        }
+
+        let mut open = true;
+
+        egui::Window::new("Export Image")
+            .open(&mut open)
+            .resizable(false)
+            .default_pos((200., 60.))
+            .show(egui_ctx, |ui| {
+                self.export_settings.show(ui);
+                ui.separator();
+                self.show_resulting_size(ui, self.canvas_size_for_export);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Export…").clicked() {
+                        events.push(Effect::UiEvent(UiEvent::ExportImageAs(
+                            self.export_settings.options.clone(),
+                        )));
+                        self.show_export_image_window = false;
+                    }
+                    if ui.button("cancel").clicked() {
+                        self.show_export_image_window = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_export_image_window = false;
+        }
+
+        events
+    }
+
+    /// Reports the size the export will come out at, noting where trimming
+    /// makes that an upper bound rather than the answer.
+    fn show_resulting_size(&self, ui: &mut egui::Ui, from: Size<i32>) {
+        let size = self.export_settings.resulting_size(from);
+
+        if self.export_settings.options.crop {
+            ui.weak(format!(
+                "up to {}x{} per image, less once the empty edges are trimmed",
+                size.x, size.y
+            ));
+        } else {
+            ui.weak(format!("{}x{} per image", size.x, size.y));
+        }
+    }
+
     /// Asks how the layers should come out: one file each, or tiled into a
     /// single sheet.
     fn update_export_layers_window(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
@@ -411,6 +479,10 @@ impl MenuBar {
                 }
 
                 ui.separator();
+                self.export_settings.show(ui);
+                ui.separator();
+                self.show_resulting_size(ui, self.canvas_size_for_export);
+
                 ui.horizontal(|ui| {
                     let ready = !self.export_as_sheet || fits;
 
@@ -418,9 +490,12 @@ impl MenuBar {
                         .add_enabled(ready, egui::Button::new("Export…"))
                         .clicked()
                     {
+                        let options = self.export_settings.options.clone();
                         let event = match (self.export_as_sheet, grid) {
-                            (true, Some((cols, rows))) => UiEvent::ExportLayerSheet(cols, rows),
-                            _ => UiEvent::ExportLayersSeparately,
+                            (true, Some((cols, rows))) => {
+                                UiEvent::ExportLayerSheet(cols, rows, options)
+                            }
+                            _ => UiEvent::ExportLayersSeparately(options),
                         };
 
                         events.push(Effect::UiEvent(event));

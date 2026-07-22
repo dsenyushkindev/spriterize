@@ -1,4 +1,6 @@
-pub use crate::{Bitmap, CanvasEffect, Color, Filter, Point, Position, Size, Tool, Transform};
+pub use crate::{
+    Bitmap, CanvasEffect, Color, ExportOptions, Filter, Point, Position, Size, Tool, Transform,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -38,14 +40,14 @@ pub enum Event {
     /// Set the radius of the brush and eraser, in pixels. Zero is a single
     /// pixel.
     SetBrushRadius(u8),
-    /// Export the image to the defined path
-    Save(PathBuf),
+    /// Export the flattened image to the defined path
+    Save(PathBuf, ExportOptions),
     /// Export each layer into the given directory as its own PNG, named after
     /// the layer
-    ExportLayers(PathBuf),
+    ExportLayers(PathBuf, ExportOptions),
     /// Export every layer into one image, tiled into a grid of the given size
     /// in cells
-    ExportLayerSheet(PathBuf, Size<u8>),
+    ExportLayerSheet(PathBuf, Size<u8>, ExportOptions),
     /// Import an image from the defined path. The image will be loaded as a
     /// free image that can be moved around, and will resize the canvas if it's
     /// too big for it.

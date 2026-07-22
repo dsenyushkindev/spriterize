@@ -953,12 +953,188 @@ fn a_sheet_needs_a_cell_for_every_layer() {
     let too_small = state.execute(Event::ExportLayerSheet(
         std::path::PathBuf::from("unused.png"),
         Size::new(2, 1),
+        lapix::ExportOptions::default(),
     ));
 
     assert!(
         matches!(too_small, Err(lapix::Error::SheetTooSmall { .. })),
         "expected a sheet size error, got {too_small:?}"
     );
+}
+
+#[cfg(feature = "test-utils")]
+fn dotted(side: i32, at: Point<i32>, color: Color) -> TestImage {
+    use lapix::Bitmap;
+
+    let mut img = TestImage::new(Size::new(side, side), TRANSPARENT);
+    img.set_pixel(at, color);
+
+    img
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn cropping_trims_to_what_is_drawn() {
+    use lapix::{export, Bitmap};
+
+    let img = dotted(16, Point::new(5, 7), BLACK);
+    let options = lapix::ExportOptions {
+        crop: true,
+        ..Default::default()
+    };
+    let out = export::prepare(&img, &options, None);
+
+    assert_eq!((out.width(), out.height()), (1, 1));
+    assert_eq!(out.pixel(Point::new(0, 0)), BLACK);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn cropping_an_empty_image_leaves_it_alone() {
+    use lapix::{export, Bitmap};
+
+    // Trimming to nothing would give a zero sized file.
+    let img = TestImage::new(Size::new(8, 8), TRANSPARENT);
+    let options = lapix::ExportOptions {
+        crop: true,
+        ..Default::default()
+    };
+    let out = export::prepare(&img, &options, None);
+
+    assert_eq!((out.width(), out.height()), (8, 8));
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn padding_surrounds_the_image_on_every_side() {
+    use lapix::{export, Bitmap};
+
+    let img = dotted(4, Point::new(0, 0), BLACK);
+    let options = lapix::ExportOptions {
+        padding: 3,
+        ..Default::default()
+    };
+    let out = export::prepare(&img, &options, None);
+
+    assert_eq!((out.width(), out.height()), (10, 10));
+    assert_eq!(out.pixel(Point::new(3, 3)), BLACK);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn the_steps_run_in_order() {
+    use lapix::{export, Bitmap};
+
+    // A single dot in a 16x16 image: crop to 1x1, pad to 3x3, double to 6x6,
+    // then round up to 8x8. Any other order gives a different size.
+    let img = dotted(16, Point::new(9, 2), BLACK);
+    let options = lapix::ExportOptions {
+        crop: true,
+        padding: 1,
+        scale: lapix::Scale::new(2, 1),
+        power_of_two: true,
+    };
+    let out = export::prepare(&img, &options, None);
+
+    assert_eq!((out.width(), out.height()), (8, 8));
+    // The doubled dot sits where the padding put it, not at the origin.
+    assert_eq!(out.pixel(Point::new(2, 2)), BLACK);
+    assert_eq!(out.pixel(Point::new(3, 3)), BLACK);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn scaling_up_repeats_whole_pixels() {
+    use lapix::{export, Bitmap};
+
+    let img = dotted(2, Point::new(0, 0), BLACK);
+    let out = export::scale(&img, lapix::Scale::new(3, 1));
+
+    assert_eq!((out.width(), out.height()), (6, 6));
+
+    for x in 0..3 {
+        for y in 0..3 {
+            assert_eq!(out.pixel(Point::new(x, y)), BLACK, "at {x},{y}");
+        }
+    }
+    assert_eq!(out.pixel(Point::new(3, 0)), TRANSPARENT);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn scaling_down_a_doubled_image_gives_the_original_back() {
+    use lapix::{export, Bitmap};
+
+    // Every block is one solid color, so averaging is exact.
+    let red = Color::new(255, 0, 0, 255);
+    let img = dotted(4, Point::new(1, 2), red);
+    let doubled = export::scale(&img, lapix::Scale::new(2, 1));
+    let back = export::scale(&doubled, lapix::Scale::new(1, 2));
+
+    assert_eq!((back.width(), back.height()), (4, 4));
+
+    for x in 0..4 {
+        for y in 0..4 {
+            let p = Point::new(x, y);
+
+            assert_eq!(back.pixel(p), img.pixel(p), "at {x},{y}");
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn scaling_down_an_odd_size_never_splits_a_pixel() {
+    use lapix::{export, Bitmap};
+
+    // 5 doesn't halve, so it is padded to 6 first and comes out 3.
+    let img = dotted(5, Point::new(0, 0), BLACK);
+    let out = export::scale(&img, lapix::Scale::new(1, 2));
+
+    assert_eq!((out.width(), out.height()), (3, 3));
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn sizing_to_a_power_of_two_rounds_each_side_up() {
+    use lapix::{export, Bitmap};
+
+    for (from, expected) in [(1, 1), (2, 2), (3, 4), (5, 8), (16, 16), (17, 32)] {
+        assert_eq!(export::next_power_of_two(from), expected, "from {from}");
+    }
+
+    let img = TestImage::new(Size::new(5, 17), TRANSPARENT);
+    let out = export::fit_to_power_of_two(&img);
+
+    assert_eq!((out.width(), out.height()), (8, 32));
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_shared_crop_keeps_images_the_same_size() {
+    use lapix::{export, Bitmap};
+
+    // Cells of a sheet have to stay aligned, so they are trimmed together.
+    let images = vec![
+        dotted(16, Point::new(2, 2), BLACK),
+        dotted(16, Point::new(9, 6), BLACK),
+    ];
+    let bounds = export::shared_bounds(&images).expect("both have content");
+    let options = lapix::ExportOptions {
+        crop: true,
+        ..Default::default()
+    };
+
+    let sizes: Vec<(i32, i32)> = images
+        .iter()
+        .map(|image| {
+            let out = export::prepare(image, &options, Some(bounds));
+
+            (out.width(), out.height())
+        })
+        .collect();
+
+    assert_eq!(sizes, vec![(8, 5), (8, 5)]);
 }
 
 #[cfg(feature = "test-utils")]

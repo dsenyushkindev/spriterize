@@ -1,8 +1,8 @@
 use crate::color::{BLACK, TRANSPARENT};
 use crate::util::{LoadProject, SaveProject};
 use crate::{
-    graphics, util, Action, AtomicAction, Bitmap, Canvas, CanvasEffect, Color, Error, Event,
-    FreeImage, Layers, Palette, Point, Position, Rect, Result, Size, Tool,
+    export, graphics, util, Action, AtomicAction, Bitmap, Canvas, CanvasEffect, Color, Error,
+    Event, ExportOptions, FreeImage, Layers, Palette, Point, Position, Rect, Result, Size, Tool,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -313,9 +313,13 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::SetBrushRadius(radius) => {
                 self.brush_radius = radius.min(graphics::MAX_BRUSH_RADIUS)
             }
-            Event::Save(path) => self.save_image(path.to_string_lossy().as_ref())?,
-            Event::ExportLayers(path) => self.export_layers(&path)?,
-            Event::ExportLayerSheet(path, cells) => self.export_layer_sheet(&path, cells)?,
+            Event::Save(path, options) => {
+                self.save_image(path.to_string_lossy().as_ref(), &options)?
+            }
+            Event::ExportLayers(path, options) => self.export_layers(&path, &options)?,
+            Event::ExportLayerSheet(path, cells, options) => {
+                self.export_layer_sheet(&path, cells, &options)?
+            }
             Event::OpenFile(path) => self.import_image(path.to_string_lossy().as_ref())?,
             Event::SaveProject(path) => {
                 if let Some(f) = &self.save_project_fn {
@@ -751,10 +755,10 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         ));
     }
 
-    fn save_image(&self, path: &str) -> Result<()> {
+    fn save_image(&self, path: &str, options: &ExportOptions) -> Result<()> {
         let blended = self.layers.blended(self.palette.colors());
 
-        util::save_image(blended, path)
+        util::save_image(export::prepare(&blended, options, None), path)
     }
 
     /// The color visible at a point, with layer filters, visibility and opacity
@@ -784,14 +788,16 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     ///
     /// A drawing built up as one layer per part yields those parts separately
     /// this way, without having to hide and export each in turn.
-    fn export_layers(&self, dir: &Path) -> Result<()> {
+    fn export_layers(&self, dir: &Path, options: &ExportOptions) -> Result<()> {
         let mut taken = HashSet::new();
 
         for i in 0..self.layers.count() {
             let name = unique_file_name(&mut taken, self.layers.get(i).name(), i);
             let out = dir.join(format!("{name}.png"));
+            // Each file stands alone, so each is trimmed to its own content.
+            let image = export::prepare(&self.layer_image(i), options, None);
 
-            util::save_image(self.layer_image(i), out.to_string_lossy().as_ref())?;
+            util::save_image(image, out.to_string_lossy().as_ref())?;
         }
 
         Ok(())
@@ -802,7 +808,12 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     ///
     /// Layers are all the same size, so they tile exactly. A drawing built up
     /// as one layer per animation frame comes out as a ready made sprite sheet.
-    fn export_layer_sheet(&self, path: &Path, cells: Size<u8>) -> Result<()> {
+    fn export_layer_sheet(
+        &self,
+        path: &Path,
+        cells: Size<u8>,
+        options: &ExportOptions,
+    ) -> Result<()> {
         let (cols, rows) = (cells.x.max(1) as i32, cells.y.max(1) as i32);
         let layers = self.layers.count() as i32;
 
@@ -814,20 +825,45 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             });
         }
 
-        let cell = self.canvas().size();
+        let images: Vec<IMG> = (0..layers).map(|i| self.layer_image(i as usize)).collect();
+        // Cells have to stay the same size to tile, so cropping uses one
+        // rectangle covering every layer rather than each layer's own.
+        let bounds = options
+            .crop
+            .then(|| export::shared_bounds(&images))
+            .flatten();
+        // Sizing to a power of two belongs to the finished sheet, not to each
+        // cell, so it is held back until the tiling is done.
+        let per_cell = ExportOptions {
+            power_of_two: false,
+            ..options.clone()
+        };
+        let cells: Vec<IMG> = images
+            .iter()
+            .map(|image| export::prepare(image, &per_cell, bounds))
+            .collect();
+
+        let cell = cells
+            .first()
+            .map(|image| Size::new(image.width(), image.height()))
+            .unwrap_or(Size::new(1, 1));
         let mut sheet = IMG::new((cell.x * cols, cell.y * rows).into(), TRANSPARENT);
 
-        for index in 0..layers {
-            let layer = self.layer_image(index as usize);
+        for (index, image) in cells.iter().enumerate() {
+            let index = index as i32;
             let origin = Point::new(index % cols * cell.x, index / cols * cell.y);
 
             for x in 0..cell.x {
                 for y in 0..cell.y {
                     let p = Point::new(x, y);
 
-                    sheet.set_pixel(origin + p, layer.pixel(p));
+                    sheet.set_pixel(origin + p, image.pixel(p));
                 }
             }
+        }
+
+        if options.power_of_two {
+            sheet = export::fit_to_power_of_two(&sheet);
         }
 
         util::save_image(sheet, path.to_string_lossy().as_ref())

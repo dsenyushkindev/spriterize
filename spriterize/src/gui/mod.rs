@@ -4,6 +4,7 @@ use lapix::{Filter, Position, Size, Tool};
 use macroquad::prelude::*;
 use std::path::PathBuf;
 
+mod export;
 mod layers;
 mod layout;
 mod menu;
@@ -48,6 +49,7 @@ pub struct GuiSyncParams {
     pub current_file: Option<PathBuf>,
     pub new_project_requested: bool,
     pub export_layers_requested: bool,
+    pub export_image_requested: bool,
     pub brush_radius: u8,
     pub settings: Settings,
     /// Framebuffer pixels per interface point, applied to egui each frame.
@@ -143,6 +145,7 @@ impl Gui {
             params.recent_files.clone(),
             params.new_project_requested,
             params.export_layers_requested,
+            params.export_image_requested,
             params.num_layers,
             params.filters_enabled,
         );
