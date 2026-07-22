@@ -426,15 +426,17 @@ impl UiState {
     /// Only for the tools that stamp, and only while the pointer is over the
     /// canvas rather than a tool window.
     fn brush_preview_at(&self, mouse_canvas: Point<i32>) -> Option<Point<i32>> {
-        // The line tool is included because a line is that dot stretched along
-        // the drag, so the dot says what the stroke will look like. A rectangle
-        // or ellipse can't be read off a single dot, so they are left out.
+        // A line is that dot swept along the drag, and a rectangle is it swept
+        // around one, so in both cases the dot shows what the stroke will look
+        // like — for the rectangle it even sits exactly where a corner will be.
+        // An ellipse is left out because the drag corner isn't on the curve, so
+        // a dot there would point at the wrong place.
         //
-        // Once a line is being dragged its own preview shows the whole stroke,
+        // Once a shape is being dragged its own preview shows the whole stroke,
         // and the dot would only be in the way.
         let stamps = match self.selected_tool() {
             Tool::Brush | Tool::Eraser => true,
-            Tool::Line => self.shape_start.is_none(),
+            Tool::Line | Tool::Rectangle => self.shape_start.is_none(),
             _ => false,
         };
 
