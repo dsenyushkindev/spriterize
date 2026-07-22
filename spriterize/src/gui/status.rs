@@ -66,7 +66,8 @@ impl StatusBar {
                         ui.label(name).on_hover_text(path.to_string_lossy());
                     }
                     None => {
-                        ui.weak("unsaved").on_hover_text("no file opened or saved yet");
+                        ui.weak("unsaved")
+                            .on_hover_text("no file opened or saved yet");
                     }
                 }
 

@@ -35,7 +35,7 @@ impl Toolbar {
         let mut events = Vec::new();
 
         egui::Window::new("Toolbox")
-            //            .default_pos((15., 280.))
+            .default_pos((15., 460.))
             .show(egui_ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.set_max_width(160.);
@@ -64,7 +64,8 @@ impl ToolButton {
         let bytes = Resources::tool_icon(tool);
         // The icons are compiled in, so a decode failure is a build problem
         // rather than something to recover from at runtime.
-        let mut img = Image::from_file_with_format(bytes, None).expect("bundled icon should decode");
+        let mut img =
+            Image::from_file_with_format(bytes, None).expect("bundled icon should decode");
         crate::theme::invert_rgb(&mut img.bytes);
 
         let x = TOOL_BTN_IMG_SIZE.x;

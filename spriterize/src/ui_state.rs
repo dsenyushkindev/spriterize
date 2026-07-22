@@ -1,24 +1,24 @@
 use crate::bg::Background;
+use crate::files::{self, RecentFiles};
 use crate::graphics::DrawContext;
 use crate::gui::{Gui, GuiSyncParams};
 use crate::input::bindings::KeyBindings;
 use crate::input::manager::InputManager;
 use crate::mouse::{CursorType, MouseManager};
-use crate::files::{self, RecentFiles};
 use crate::project;
 use crate::settings::{Settings, MAX_UI_SCALE, MIN_UI_SCALE};
 use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
-use std::path::PathBuf;
 use lapix::primitives::*;
 use lapix::{Canvas, CanvasEffect, Event, Layer, LoadProject, SaveProject, Selection, State, Tool};
 use macroquad::prelude::Color as MqColor;
 use macroquad::prelude::{FilterMode, Texture2D};
 use std::default::Default;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
-pub const WINDOW_W: i32 = 1000;
-pub const WINDOW_H: i32 = 600;
+pub const WINDOW_W: i32 = 1200;
+pub const WINDOW_H: i32 = 780;
 pub const CANVAS_W: u16 = 64;
 pub const CANVAS_H: u16 = 64;
 const LEFT_TOOLBAR_W: u16 = 300;
@@ -274,6 +274,22 @@ impl UiState {
         Ok(())
     }
 
+    pub fn apply_startup_window_size(&self) {
+        let (width, height) = match self.settings.window_size {
+            Some(size) => size,
+            None => {
+                let scale = dpi_scale();
+
+                (
+                    (WINDOW_W as f32 * scale) as u32,
+                    (WINDOW_H as f32 * scale) as u32,
+                )
+            }
+        };
+
+        macroquad::window::request_new_screen_size(width as f32, height as f32);
+    }
+
     /// Re-centers the canvas whenever the drawing area changes size, which
     /// covers the first frame, resizing the window and maximizing it.
     ///
@@ -283,8 +299,17 @@ impl UiState {
         let screen = screen_size();
 
         if screen != self.last_screen_size {
+            let first_frame = self.last_screen_size == Size::ZERO_F32;
+
             self.last_screen_size = screen;
             self.center_canvas();
+
+            // Remember the size the user settles on, but don't write back the
+            // one we just asked for ourselves.
+            if !first_frame {
+                self.settings.window_size = Some((screen.x as u32, screen.y as u32));
+                self.settings.save();
+            }
         }
     }
 

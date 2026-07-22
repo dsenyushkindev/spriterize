@@ -19,6 +19,9 @@ pub struct Settings {
     pub ui_scale: f32,
     /// Draw a grid between canvas pixels.
     pub show_grid: bool,
+    /// Window size in physical pixels, as last left by the user. `None` on a
+    /// first run, when the size is derived from the display's scaling instead.
+    pub window_size: Option<(u32, u32)>,
 }
 
 impl Default for Settings {
@@ -26,6 +29,7 @@ impl Default for Settings {
         Self {
             ui_scale: 1.0,
             show_grid: true,
+            window_size: None,
         }
     }
 }
@@ -64,6 +68,13 @@ impl Settings {
                         settings.show_grid = show;
                     }
                 }
+                "window_size" => {
+                    if let Some((w, h)) = value.trim().split_once('x') {
+                        if let (Ok(w), Ok(h)) = (w.trim().parse(), h.trim().parse()) {
+                            settings.window_size = Some((w, h));
+                        }
+                    }
+                }
                 _ => (),
             }
         }
@@ -80,10 +91,11 @@ impl Settings {
             let _ = std::fs::create_dir_all(dir);
         }
 
-        let text = format!(
-            "ui_scale={}\nshow_grid={}\n",
-            self.ui_scale, self.show_grid
-        );
+        let mut text = format!("ui_scale={}\nshow_grid={}\n", self.ui_scale, self.show_grid);
+
+        if let Some((w, h)) = self.window_size {
+            text.push_str(&format!("window_size={w}x{h}\n"));
+        }
 
         let _ = std::fs::write(path, text);
     }
@@ -103,9 +115,8 @@ mod tests {
 
     #[test]
     fn survives_junk_unknown_keys_and_missing_values() {
-        let settings = Settings::parse(
-            "nonsense\nui_scale=not-a-number\nfuture_option=7\nshow_grid=true\n",
-        );
+        let settings =
+            Settings::parse("nonsense\nui_scale=not-a-number\nfuture_option=7\nshow_grid=true\n");
 
         assert_eq!(settings.ui_scale, Settings::default().ui_scale);
         assert!(settings.show_grid);
@@ -118,15 +129,28 @@ mod tests {
     }
 
     #[test]
+    fn reads_window_size() {
+        assert_eq!(
+            Settings::parse("window_size=1600x1000").window_size,
+            Some((1600, 1000))
+        );
+        assert_eq!(Settings::parse("window_size=garbage").window_size, None);
+        assert_eq!(Settings::parse("window_size=1600x").window_size, None);
+    }
+
+    #[test]
     fn round_trips_through_the_saved_format() {
         let settings = Settings {
             ui_scale: 1.5,
             show_grid: false,
+            window_size: Some((1600, 1000)),
         };
-        let text = format!(
+        let mut text = format!(
             "ui_scale={}\nshow_grid={}\n",
             settings.ui_scale, settings.show_grid
         );
+        let (w, h) = settings.window_size.unwrap();
+        text.push_str(&format!("window_size={w}x{h}\n"));
 
         assert_eq!(Settings::parse(&text), settings);
     }

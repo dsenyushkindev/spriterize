@@ -57,6 +57,8 @@ fn window_conf() -> macroquad::conf::Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     let mut state = UiState::default();
+    state.apply_startup_window_size();
+
     let mut frame = 0;
 
     loop {
