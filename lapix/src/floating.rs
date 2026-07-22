@@ -61,30 +61,41 @@ impl<IMG: Bitmap> FreeImage<IMG> {
         Self::new(offset, img)
     }
 
-    /// Creates a free image with a line between two points in a certain color.
-    pub fn line_preview(p0: Point<i32>, p: Point<i32>, color: Color) -> Self {
+    /// Creates a free image showing a shape drawn between two points, widened
+    /// by a brush of the given radius.
+    ///
+    /// A thick stroke reaches `radius` pixels beyond the two corners, so the
+    /// image is grown on every side to make room for it.
+    fn stroke_preview(
+        p0: Point<i32>,
+        p: Point<i32>,
+        points: Vec<Point<i32>>,
+        color: Color,
+        radius: u8,
+    ) -> Self {
+        let margin = Point::new(radius as i32, radius as i32);
         let span = p.abs_diff(p0);
-        let offset = p.rect_min_corner(p0);
+        let offset = p.rect_min_corner(p0) - margin;
+        let size = span + Point::ONE + margin + margin;
 
-        FreeImage::from_pixels(span + Point::ONE, graphics::line(p0, p), color, offset)
+        FreeImage::from_pixels(size, graphics::thicken(points, radius), color, offset)
+    }
+
+    /// Creates a free image with a line between two points in a certain color.
+    pub fn line_preview(p0: Point<i32>, p: Point<i32>, color: Color, radius: u8) -> Self {
+        Self::stroke_preview(p0, p, graphics::line(p0, p), color, radius)
     }
 
     /// Creates a free image with a rectangle between two points in a certain
     /// color.
-    pub fn rect_preview(p0: Point<i32>, p: Point<i32>, color: Color) -> Self {
-        let span = p.abs_diff(p0);
-        let offset = p.rect_min_corner(p0);
-
-        FreeImage::from_pixels(span + Point::ONE, graphics::rectangle(p0, p), color, offset)
+    pub fn rect_preview(p0: Point<i32>, p: Point<i32>, color: Color, radius: u8) -> Self {
+        Self::stroke_preview(p0, p, graphics::rectangle(p0, p), color, radius)
     }
 
     /// Creates a free image with an ellipse between two points in a certain
     /// color.
-    pub fn ellipse_preview(p0: Point<i32>, p: Point<i32>, color: Color) -> Self {
-        let span = p.abs_diff(p0);
-        let offset = p.rect_min_corner(p0);
-
-        FreeImage::from_pixels(span + Point::ONE, graphics::ellipse(p0, p), color, offset)
+    pub fn ellipse_preview(p0: Point<i32>, p: Point<i32>, color: Color, radius: u8) -> Self {
+        Self::stroke_preview(p0, p, graphics::ellipse(p0, p), color, radius)
     }
 
     /// Change the position of the free image considering that the passed point

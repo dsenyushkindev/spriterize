@@ -266,6 +266,89 @@ fn there_is_no_selection_preview_when_nothing_is_being_dragged() {
 
 #[cfg(feature = "test-utils")]
 #[test]
+fn a_wider_stroke_thickens_a_line() {
+    let side = 11;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::SetBrushRadius(1)).unwrap();
+    state.execute(Event::LineStart(Point::new(5, 2))).unwrap();
+    state.execute(Event::LineEnd(Point::new(5, 8))).unwrap();
+
+    // A radius of one turns the single pixel wide line into a three wide one.
+    for y in 2..=8 {
+        for x in 4..=6 {
+            assert_eq!(
+                state.canvas().pixel(Point::new(x, y)),
+                BLACK,
+                "at {x},{y} on a thick line"
+            );
+        }
+    }
+
+    // ...and no further.
+    assert_eq!(state.canvas().pixel(Point::new(3, 5)), TRANSPARENT);
+    assert_eq!(state.canvas().pixel(Point::new(7, 5)), TRANSPARENT);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_wider_stroke_thickens_rectangles_and_ellipses() {
+    let side = 16;
+
+    for event in [
+        Event::RectEnd(Point::new(12, 12)),
+        Event::EllipseEnd(Point::new(12, 12)),
+    ] {
+        let start = match event {
+            Event::RectEnd(_) => Event::RectStart(Point::new(3, 3)),
+            _ => Event::EllipseStart(Point::new(3, 3)),
+        };
+        let mut thin = State::<TestImage>::new(Size::new(side, side), None, None);
+        thin.execute(start.clone()).unwrap();
+        thin.execute(event.clone()).unwrap();
+
+        let mut thick = State::<TestImage>::new(Size::new(side, side), None, None);
+        thick.execute(Event::SetBrushRadius(2)).unwrap();
+        thick.execute(start).unwrap();
+        thick.execute(event.clone()).unwrap();
+
+        let painted = |state: &State<TestImage>| {
+            (0..side)
+                .flat_map(|i| (0..side).map(move |j| (i, j)))
+                .filter(|(i, j)| state.canvas().pixel(Point::new(*i, *j)) != TRANSPARENT)
+                .count()
+        };
+
+        assert!(
+            painted(&thick) > painted(&thin),
+            "a wider stroke should cover more for {event:?}"
+        );
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_thick_preview_is_not_clipped_at_its_corners() {
+    // The preview image has to grow by the radius on every side, or the ends of
+    // a thick stroke would be cut off.
+    let radius = 3;
+    let thin =
+        lapix::FreeImage::<TestImage>::line_preview(Point::new(4, 4), Point::new(8, 8), BLACK, 0);
+    let thick = lapix::FreeImage::<TestImage>::line_preview(
+        Point::new(4, 4),
+        Point::new(8, 8),
+        BLACK,
+        radius,
+    );
+
+    assert_eq!(thick.rect.w, thin.rect.w + 2 * radius as i32);
+    assert_eq!(thick.rect.h, thin.rect.h + 2 * radius as i32);
+    assert_eq!(thick.rect.x, thin.rect.x - radius as i32);
+    assert_eq!(thick.rect.y, thin.rect.y - radius as i32);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
 fn layers_start_with_distinct_default_names() {
     let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
 

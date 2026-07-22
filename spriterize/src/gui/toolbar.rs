@@ -54,8 +54,12 @@ impl Toolbar {
                 }
             });
 
-            // Only the stamping tools use it, so it would be noise otherwise.
-            if matches!(selected_tool, Tool::Brush | Tool::Eraser) {
+            // Only the tools that lay down a stroke use it, so it would be
+            // noise for the others.
+            if matches!(
+                selected_tool,
+                Tool::Brush | Tool::Eraser | Tool::Line | Tool::Rectangle | Tool::Ellipse
+            ) {
                 ui.separator();
 
                 let mut radius = brush_radius;
@@ -67,7 +71,7 @@ impl Toolbar {
                             .show_value(false)
                             .custom_formatter(|r, _| format!("{}", 2. * r + 1.)),
                     )
-                    .on_hover_text("brush radius");
+                    .on_hover_text("stroke radius, shared by the drawing tools");
                     // Shown as a diameter, which is what the stamp on screen
                     // measures across.
                     ui.label(format!("{} px", 2 * radius as u16 + 1));

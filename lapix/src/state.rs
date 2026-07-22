@@ -84,9 +84,10 @@ pub struct State<IMG> {
     events: Vec<Event>,
     tool: Tool,
     main_color: Color,
-    /// Radius of the brush and eraser, in pixels. A tool setting rather than
-    /// part of the drawing, so it is deliberately left out of saved projects —
-    /// which also keeps the format readable by older versions.
+    /// Radius of the stroke the drawing tools lay down, in pixels: the brush
+    /// and eraser, and the line, rectangle and ellipse outlines. A tool setting
+    /// rather than part of the drawing, so it is deliberately left out of saved
+    /// projects — which also keeps the format readable by older versions.
     #[serde(skip, default = "default_brush_radius")]
     brush_radius: u8,
     spritesheet: Size<u8>,
@@ -224,7 +225,8 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                     _ => return Err(Error::DrawingNotStarted),
                 };
                 let color = self.main_color;
-                let reversals = self.canvas_mut().line(p0, p, color);
+                let radius = self.brush_radius;
+                let reversals = self.canvas_mut().line(p0, p, color, radius);
                 self.single_pixels_action(reversals);
                 self.free_image = None;
             }
@@ -235,7 +237,8 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                     _ => return Err(Error::DrawingNotStarted),
                 };
                 let color = self.main_color;
-                let reversals = self.canvas_mut().rectangle(p0, p, color);
+                let radius = self.brush_radius;
+                let reversals = self.canvas_mut().rectangle(p0, p, color, radius);
                 self.single_pixels_action(reversals);
                 self.free_image = None;
             }
@@ -246,7 +249,8 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                     _ => return Err(Error::DrawingNotStarted),
                 };
                 let color = self.main_color;
-                let reversals = self.canvas_mut().ellipse(p0, p, color);
+                let radius = self.brush_radius;
+                let reversals = self.canvas_mut().ellipse(p0, p, color, radius);
                 self.single_pixels_action(reversals);
                 self.free_image = None;
             }
@@ -259,7 +263,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                     Some(Event::BrushStroke(p0)) => {
                         let color = self.main_color;
                         let p0 = *p0;
-                        self.canvas_mut().brush_line(p0, p, color, radius)
+                        self.canvas_mut().line(p0, p, color, radius)
                     }
                     Some(Event::BrushStart) => {
                         let color = self.main_color;
@@ -277,7 +281,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                 let reversals = match last_event {
                     Some(Event::Erase(p0)) => {
                         let p0 = *p0;
-                        self.canvas_mut().brush_line(p0, p, TRANSPARENT, radius)
+                        self.canvas_mut().line(p0, p, TRANSPARENT, radius)
                     }
                     Some(Event::EraseStart) => self.canvas_mut().brush(p, TRANSPARENT, radius),
                     _ => Vec::new(),
@@ -674,15 +678,30 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     }
 
     fn update_line_preview(&mut self, p0: Point<i32>, p: Point<i32>) {
-        self.free_image = Some(FreeImage::line_preview(p0, p, self.main_color()));
+        self.free_image = Some(FreeImage::line_preview(
+            p0,
+            p,
+            self.main_color(),
+            self.brush_radius,
+        ));
     }
 
     fn update_rect_preview(&mut self, p0: Point<i32>, p: Point<i32>) {
-        self.free_image = Some(FreeImage::rect_preview(p0, p, self.main_color()));
+        self.free_image = Some(FreeImage::rect_preview(
+            p0,
+            p,
+            self.main_color(),
+            self.brush_radius,
+        ));
     }
 
     fn update_ellipse_preview(&mut self, p0: Point<i32>, p: Point<i32>) {
-        self.free_image = Some(FreeImage::ellipse_preview(p0, p, self.main_color()));
+        self.free_image = Some(FreeImage::ellipse_preview(
+            p0,
+            p,
+            self.main_color(),
+            self.brush_radius,
+        ));
     }
 
     fn save_image(&self, path: &str) -> Result<()> {

@@ -61,6 +61,34 @@ pub fn brush_offsets(radius: u8) -> Vec<Point<i32>> {
     offsets
 }
 
+/// Widens a set of [`Point`]s by stamping a brush of the given radius over each
+/// of them, so a one pixel outline becomes a thick one.
+///
+/// Duplicates are removed, which matters when the caller records how to undo the
+/// change: a pixel set twice would otherwise be reverted to a color from earlier
+/// in the same stroke.
+pub fn thicken(points: impl IntoIterator<Item = Point<i32>>, radius: u8) -> Vec<Point<i32>> {
+    if radius == 0 {
+        return points.into_iter().collect();
+    }
+
+    let offsets = brush_offsets(radius);
+    let mut seen = HashSet::new();
+    let mut thickened = Vec::new();
+
+    for point in points {
+        for offset in &offsets {
+            let p = point + *offset;
+
+            if seen.insert(p) {
+                thickened.push(p);
+            }
+        }
+    }
+
+    thickened
+}
+
 /// Get the set of [`Point`]s needed to draw a rectangle between two points
 pub fn rectangle(p1: Point<i32>, p2: Point<i32>) -> Vec<Point<i32>> {
     let l1 = line((p1.x, p1.y).into(), (p1.x, p2.y).into());
