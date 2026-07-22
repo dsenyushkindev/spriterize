@@ -15,6 +15,14 @@ pub struct MenuBar {
     can_undo: bool,
     can_redo: bool,
     filters_enabled: bool,
+    show_export_layers_window: bool,
+    /// Whether the export window is offering a sheet rather than one file per
+    /// layer.
+    export_as_sheet: bool,
+    /// Grid size while it is being typed, so a half finished number doesn't
+    /// have to parse.
+    sheet_str: (String, String),
+    num_layers: usize,
 }
 
 impl MenuBar {
@@ -32,6 +40,10 @@ impl MenuBar {
             can_undo: false,
             can_redo: false,
             filters_enabled: true,
+            show_export_layers_window: false,
+            export_as_sheet: false,
+            sheet_str: ("1".to_owned(), "1".to_owned()),
+            num_layers: 1,
         }
     }
 
@@ -44,6 +56,8 @@ impl MenuBar {
         can_redo: bool,
         recent_files: Vec<PathBuf>,
         new_project_requested: bool,
+        export_layers_requested: bool,
+        num_layers: usize,
         filters_enabled: bool,
     ) {
         self.canvas_size = canvas_size;
@@ -52,6 +66,13 @@ impl MenuBar {
         self.can_redo = can_redo;
         self.recent_files = recent_files;
         self.filters_enabled = filters_enabled;
+        self.num_layers = num_layers;
+
+        if export_layers_requested {
+            // Start from a grid that fits: a single row of everything.
+            self.sheet_str = (num_layers.to_string(), "1".to_owned());
+            self.show_export_layers_window = true;
+        }
 
         // The New Project shortcut goes through the same confirmation as the
         // menu entry, rather than discarding the project outright.
@@ -66,6 +87,7 @@ impl MenuBar {
         events.append(&mut self.update_spritesheet_window(egui_ctx));
         events.append(&mut self.update_confirm_exit_window(egui_ctx));
         events.append(&mut self.update_confirm_new_window(egui_ctx));
+        events.append(&mut self.update_export_layers_window(egui_ctx));
         events
     }
 
@@ -302,6 +324,116 @@ impl MenuBar {
                         }
                     });
                 });
+        }
+
+        events
+    }
+
+    /// Asks how the layers should come out: one file each, or tiled into a
+    /// single sheet.
+    fn update_export_layers_window(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
+        let mut events = Vec::new();
+
+        if !self.show_export_layers_window {
+            return events;
+        }
+
+        let mut open = true;
+
+        egui::Window::new("Export Layers")
+            .open(&mut open)
+            .resizable(false)
+            .default_pos((200., 60.))
+            .show(egui_ctx, |ui| {
+                ui.label(format!(
+                    "{} layer{}",
+                    self.num_layers,
+                    if self.num_layers == 1 { "" } else { "s" }
+                ));
+                ui.separator();
+
+                ui.radio_value(&mut self.export_as_sheet, false, "One image per layer")
+                    .on_hover_text("into a folder, each named after its layer");
+                ui.radio_value(&mut self.export_as_sheet, true, "A single sprite sheet")
+                    .on_hover_text("the layers tiled into a grid, in order from the bottom");
+
+                // How many cells the grid has, and so whether every layer fits.
+                let grid = self
+                    .sheet_str
+                    .0
+                    .parse::<u8>()
+                    .ok()
+                    .zip(self.sheet_str.1.parse::<u8>().ok())
+                    .filter(|(cols, rows)| *cols > 0 && *rows > 0);
+                let fits = grid
+                    .map(|(cols, rows)| cols as usize * rows as usize >= self.num_layers)
+                    .unwrap_or(false);
+
+                if self.export_as_sheet {
+                    ui.horizontal(|ui| {
+                        let label = ui.label("cells across:");
+                        ui.add(
+                            egui::widgets::TextEdit::singleline(&mut self.sheet_str.0)
+                                .desired_width(30.0),
+                        )
+                        .labelled_by(label.id);
+                        let label = ui.label("down:");
+                        ui.add(
+                            egui::widgets::TextEdit::singleline(&mut self.sheet_str.1)
+                                .desired_width(30.0),
+                        )
+                        .labelled_by(label.id);
+                    });
+
+                    match grid {
+                        Some((cols, rows)) if fits => {
+                            ui.weak(format!(
+                                "{} cells, filled left to right and top to bottom",
+                                cols as usize * rows as usize
+                            ));
+                        }
+                        Some((cols, rows)) => {
+                            ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                format!(
+                                    "{}x{} holds {} of {} layers",
+                                    cols,
+                                    rows,
+                                    cols as usize * rows as usize,
+                                    self.num_layers
+                                ),
+                            );
+                        }
+                        None => {
+                            ui.colored_label(ui.visuals().warn_fg_color, "needs two whole numbers");
+                        }
+                    }
+                }
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let ready = !self.export_as_sheet || fits;
+
+                    if ui
+                        .add_enabled(ready, egui::Button::new("Export…"))
+                        .clicked()
+                    {
+                        let event = match (self.export_as_sheet, grid) {
+                            (true, Some((cols, rows))) => UiEvent::ExportLayerSheet(cols, rows),
+                            _ => UiEvent::ExportLayersSeparately,
+                        };
+
+                        events.push(Effect::UiEvent(event));
+                        self.show_export_layers_window = false;
+                    }
+                    if ui.button("cancel").clicked() {
+                        self.show_export_layers_window = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_export_layers_window = false;
         }
 
         events

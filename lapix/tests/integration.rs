@@ -943,6 +943,26 @@ fn a_setting_that_was_never_saved_falls_back_to_its_default() {
 
 #[cfg(feature = "test-utils")]
 #[test]
+fn a_sheet_needs_a_cell_for_every_layer() {
+    let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
+
+    state.execute(Event::NewLayerAbove).unwrap();
+    state.execute(Event::NewLayerAbove).unwrap();
+
+    // Three layers won't fit in two cells.
+    let too_small = state.execute(Event::ExportLayerSheet(
+        std::path::PathBuf::from("unused.png"),
+        Size::new(2, 1),
+    ));
+
+    assert!(
+        matches!(too_small, Err(lapix::Error::SheetTooSmall { .. })),
+        "expected a sheet size error, got {too_small:?}"
+    );
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
 fn layers_start_with_distinct_default_names() {
     let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
 

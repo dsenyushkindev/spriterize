@@ -92,7 +92,13 @@ pub enum UiEvent {
     SaveProject,
     SaveProjectAs,
     ExportImage,
+    /// Ask the menu to put up the export options
     ExportLayers,
+    /// One image per layer, into a folder
+    ExportLayersSeparately,
+    /// All the layers tiled into one image, the given number of cells across
+    /// and down
+    ExportLayerSheet(u8, u8),
     ImportImage,
     OpenRecent(PathBuf),
     ClearRecent,
@@ -161,6 +167,7 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             recent_files: state.recent.paths().to_vec(),
             current_file: state.current_file.clone(),
             new_project_requested: state.new_project_requested,
+            export_layers_requested: state.export_layers_requested,
             brush_radius: state.inner.brush_radius(),
             settings: state.settings.clone(),
             ui_scale: state.ui_scale(),
@@ -203,6 +210,9 @@ pub struct UiState {
     /// Set by the New Project shortcut, and consumed by the menu on the next
     /// frame to raise its confirmation window.
     new_project_requested: bool,
+    /// Set by the Export Layers shortcut, and consumed by the menu on the next
+    /// frame to raise its options window.
+    export_layers_requested: bool,
     /// Where a line, rectangle or ellipse being dragged started. Kept here
     /// because constraining the shape with shift needs the anchor as well as
     /// the cursor.
@@ -250,6 +260,7 @@ impl Default for UiState {
             current_file: None,
             recent: RecentFiles::load(),
             new_project_requested: false,
+            export_layers_requested: false,
             shape_start: None,
         }
     }
@@ -278,9 +289,10 @@ impl UiState {
         self.handle_dropped_files()?;
 
         self.gui.sync((&*self).into());
-        // The menu has now seen the request and raised its confirmation window,
-        // so it mustn't be raised again on the following frames.
+        // The menu has now seen these and raised its windows, so they mustn't be
+        // raised again on the following frames.
         self.new_project_requested = false;
+        self.export_layers_requested = false;
         let fx = self.gui.update();
         self.process_fx(fx)?;
 
@@ -721,10 +733,17 @@ impl UiState {
                     self.recent.push(path);
                 }
             }
-            UiEvent::ExportLayers => {
+            UiEvent::ExportLayers => self.export_layers_requested = true,
+            UiEvent::ExportLayersSeparately => {
                 // A directory, not a file: each layer is named after itself.
                 if let Some(dir) = files::export_layers_dir(self.current_file.as_deref()) {
                     self.execute(Event::ExportLayers(dir))?;
+                }
+            }
+            UiEvent::ExportLayerSheet(cols, rows) => {
+                if let Some(path) = files::export_image(self.current_file.as_deref()) {
+                    self.execute(Event::ExportLayerSheet(path.clone(), (cols, rows).into()))?;
+                    self.recent.push(path);
                 }
             }
             UiEvent::ImportImage => {

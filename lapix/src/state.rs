@@ -315,6 +315,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             }
             Event::Save(path) => self.save_image(path.to_string_lossy().as_ref())?,
             Event::ExportLayers(path) => self.export_layers(&path)?,
+            Event::ExportLayerSheet(path, cells) => self.export_layer_sheet(&path, cells)?,
             Event::OpenFile(path) => self.import_image(path.to_string_lossy().as_ref())?,
             Event::SaveProject(path) => {
                 if let Some(f) = &self.save_project_fn {
@@ -794,6 +795,42 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         }
 
         Ok(())
+    }
+
+    /// Export every layer into one image, tiled left to right and top to
+    /// bottom into a grid `cells` across and down.
+    ///
+    /// Layers are all the same size, so they tile exactly. A drawing built up
+    /// as one layer per animation frame comes out as a ready made sprite sheet.
+    fn export_layer_sheet(&self, path: &Path, cells: Size<u8>) -> Result<()> {
+        let (cols, rows) = (cells.x.max(1) as i32, cells.y.max(1) as i32);
+        let layers = self.layers.count() as i32;
+
+        if cols * rows < layers {
+            return Err(Error::SheetTooSmall {
+                cols: cols as u32,
+                rows: rows as u32,
+                layers: layers as u32,
+            });
+        }
+
+        let cell = self.canvas().size();
+        let mut sheet = IMG::new((cell.x * cols, cell.y * rows).into(), TRANSPARENT);
+
+        for index in 0..layers {
+            let layer = self.layer_image(index as usize);
+            let origin = Point::new(index % cols * cell.x, index / cols * cell.y);
+
+            for x in 0..cell.x {
+                for y in 0..cell.y {
+                    let p = Point::new(x, y);
+
+                    sheet.set_pixel(origin + p, layer.pixel(p));
+                }
+            }
+        }
+
+        util::save_image(sheet, path.to_string_lossy().as_ref())
     }
 
     /// The image of a single layer as it appears on screen, with the layer's

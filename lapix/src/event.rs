@@ -43,6 +43,9 @@ pub enum Event {
     /// Export each layer into the given directory as its own PNG, named after
     /// the layer
     ExportLayers(PathBuf),
+    /// Export every layer into one image, tiled into a grid of the given size
+    /// in cells
+    ExportLayerSheet(PathBuf, Size<u8>),
     /// Import an image from the defined path. The image will be loaded as a
     /// free image that can be moved around, and will resize the canvas if it's
     /// too big for it.
