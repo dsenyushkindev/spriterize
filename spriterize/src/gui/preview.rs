@@ -117,24 +117,18 @@ impl Preview {
                 h: rect.h / preview_scale,
             };
 
-            for i in 0..state.num_layers() {
-                if !state.layer(i).visible() {
-                    continue;
-                }
+            // The flattened stack, so the preview shows exactly what the canvas
+            // does, filters and all.
+            let params = DrawTextureParams {
+                source: Some(scrollarea_frame),
+                dest_size: Some(Vec2 {
+                    x: rect.w,
+                    y: rect.h,
+                }),
+                ..Default::default()
+            };
 
-                let texture = state.layer_tex(i);
-                let params = DrawTextureParams {
-                    source: Some(scrollarea_frame),
-                    dest_size: Some(Vec2 {
-                        x: rect.w,
-                        y: rect.h,
-                    }),
-                    ..Default::default()
-                };
-
-                let color = [255, 255, 255, state.layer(i).opacity()];
-                draw_texture_ex(texture, rect.x, rect.y, color.into(), params);
-            }
+            draw_texture_ex(state.canvas_texture(), rect.x, rect.y, WHITE, params);
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::color::TRANSPARENT;
-use crate::{graphics, Bitmap, Color, FreeImage, Point, Rect, Size};
+use crate::{graphics, transform, Bitmap, Color, FreeImage, Point, Rect, Size};
 use serde::{Deserialize, Serialize};
 
 /// Effects that certain actions can have on the canvas
@@ -144,6 +144,31 @@ impl<IMG: Bitmap> Canvas<IMG> {
     /// reverse the action).
     pub fn brush(&mut self, p: Point<i32>, color: Color, radius: u8) -> Vec<(Point<i32>, Color)> {
         self.stamp([p], color, radius)
+    }
+
+    /// Soften the edges between colors under a brush of the given radius.
+    /// Returns a set of reversals (points and the colors they need to be set to
+    /// in order to reverse the action).
+    pub fn smooth(&mut self, p: Point<i32>, radius: u8) -> Vec<(Point<i32>, Color)> {
+        // Every new color is worked out before any is written, so a pixel
+        // already softened this stamp doesn't feed into its neighbours and
+        // smear the result across the stroke.
+        let softened: Vec<(Point<i32>, Color)> = graphics::brush_offsets(radius)
+            .into_iter()
+            .map(|offset| p + offset)
+            .filter(|q| self.is_in_bounds(*q))
+            .map(|q| (q, transform::smoothed_pixel(&self.inner, q)))
+            .collect();
+
+        let mut reversals = Vec::new();
+
+        for (q, color) in softened {
+            if let Some(action) = self.set_pixel(q, color) {
+                reversals.push(action);
+            }
+        }
+
+        reversals
     }
 
     /// Draw a line between two points in the canvas with a certain color and

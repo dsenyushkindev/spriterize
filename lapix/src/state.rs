@@ -216,8 +216,28 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                 self.end_action();
             }
             Event::LineStart(_) | Event::RectStart(_) | Event::EllipseStart(_) => (),
-            Event::BrushStart | Event::EraseStart => self.start_action(),
-            Event::BrushEnd | Event::EraseEnd => self.end_action(),
+            Event::BrushStart | Event::EraseStart | Event::SmoothStart => self.start_action(),
+            Event::BrushEnd | Event::EraseEnd | Event::SmoothEnd => self.end_action(),
+            Event::SmoothStroke(p) => {
+                let radius = self.brush_radius;
+                let last_event = self.events.last();
+
+                let reversals = match last_event {
+                    // Softening along the whole segment, so a quick drag doesn't
+                    // leave gaps between stamps.
+                    Some(Event::SmoothStroke(p0)) => {
+                        let p0 = *p0;
+
+                        graphics::line(p0, p)
+                            .into_iter()
+                            .flat_map(|centre| self.canvas_mut().smooth(centre, radius))
+                            .collect()
+                    }
+                    Some(Event::SmoothStart) => self.canvas_mut().smooth(p, radius),
+                    _ => Vec::new(),
+                };
+                self.add_to_pixels_action(reversals)?;
+            }
             Event::LineEnd(p) => {
                 let last_event = self.events.last();
                 let p0 = match last_event {
@@ -317,13 +337,21 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
                 }
             }
             Event::LoadPalette(path) => {
-                self.palette = Palette::from_file(path.to_string_lossy().as_ref())?
+                self.palette = Palette::from_file(path.to_string_lossy().as_ref())?;
+                // A filter can map onto the palette, so its result is stale now.
+                self.layers.invalidate_filters();
             }
             Event::SavePalette(path) => {
                 self.palette.save_to_file(path.to_string_lossy().as_ref())?
             }
-            Event::AddToPalette(color) => self.palette.add_color(color),
-            Event::RemoveFromPalette(color) => self.palette.remove_color(color),
+            Event::AddToPalette(color) => {
+                self.palette.add_color(color);
+                self.layers.invalidate_filters();
+            }
+            Event::RemoveFromPalette(color) => {
+                self.palette.remove_color(color);
+                self.layers.invalidate_filters();
+            }
             Event::Bucket(p) => {
                 if self.canvas().is_in_bounds(p) {
                     let color = self.main_color;
@@ -439,6 +467,24 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::ChangeLayerVisibility(i, visible) => self.layers.set_visibility(i, visible),
             Event::ChangeLayerOpacity(i, alpha) => self.layers.set_opacity(i, alpha),
             Event::RenameLayer(i, name) => self.layers.set_name(i, name),
+            Event::SetLayerFilters(i, filters) => {
+                // The chain the layer had is what reverses this, and recording
+                // the whole chain as one action makes any change to it — adding,
+                // removing, reordering — a single step to undo.
+                let previous = self.layers.set_filters(i, filters);
+
+                self.start_action();
+                self.add_to_action(vec![AtomicAction::SetLayerFilters(i, previous)])?;
+                self.end_action();
+            }
+            Event::SetFiltersEnabled(enabled) => self.layers.set_filters_enabled(enabled),
+            Event::SetLayerAdjustment(i, adjustment) => {
+                let previous = self.layers.set_adjustment(i, adjustment);
+
+                self.start_action();
+                self.add_to_action(vec![AtomicAction::SetLayerAdjustment(i, previous)])?;
+                self.end_action();
+            }
             // TODO: this should not only remove it, as we need to be able to
             // undo this
             Event::DeleteLayer(i) => {
@@ -705,9 +751,31 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     }
 
     fn save_image(&self, path: &str) -> Result<()> {
-        let blended = self.layers.blended();
+        let blended = self.layers.blended(self.palette.colors());
 
         util::save_image(blended, path)
+    }
+
+    /// The color visible at a point, with layer filters, visibility and opacity
+    /// all taken into account: what the eyedropper would pick up.
+    pub fn visible_pixel(&self, p: Point<i32>) -> Color {
+        self.layers.visible_pixel(p, self.palette.colors())
+    }
+
+    /// The image of a layer as it is shown, with its filters applied
+    pub fn rendered_layer(&self, index: usize) -> crate::Rendered<'_, IMG> {
+        self.layers.rendered(index, self.palette.colors())
+    }
+
+    /// Every layer flattened into one image, as it should be seen: filters,
+    /// visibility, opacity and adjustment layers all accounted for.
+    pub fn composite(&self) -> std::cell::Ref<'_, IMG> {
+        self.layers.composite(self.palette.colors())
+    }
+
+    /// Whether layer filters are being applied
+    pub fn filters_enabled(&self) -> bool {
+        self.layers.filters_enabled()
     }
 
     /// Export every layer into a directory as its own PNG, named after the
@@ -731,14 +799,15 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     /// The image of a single layer as it appears on screen, with the layer's
     /// opacity baked into the alpha channel.
     fn layer_image(&self, index: usize) -> IMG {
-        let canvas = self.layers.canvas_at(index);
+        // Exported as shown, filters included.
+        let rendered = self.rendered_layer(index);
         let opacity = self.layers.get(index).opacity() as u16;
-        let mut img = IMG::new(canvas.size(), TRANSPARENT);
+        let mut img = IMG::new(rendered.size(), TRANSPARENT);
 
-        for i in 0..canvas.width() {
-            for j in 0..canvas.height() {
+        for i in 0..rendered.width() {
+            for j in 0..rendered.height() {
                 let p = Point::new(i, j);
-                let mut color = canvas.pixel(p);
+                let mut color = rendered.pixel(p);
                 color.a = (color.a as u16 * opacity / 255) as u8;
 
                 img.set_pixel(p, color);

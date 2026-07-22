@@ -157,6 +157,10 @@ impl KeyBindings {
                 InputEvent::KeyPress(mq::KeyCode::M.into()).into(),
                 Event::SetTool(Tool::Move).into(),
             ),
+            (
+                InputEvent::KeyPress(mq::KeyCode::K.into()).into(),
+                Event::SetTool(Tool::Smooth).into(),
+            ),
             // FLIP
             (
                 InputEvent::KeyPress(mq::KeyCode::H.into()).into(),
@@ -199,6 +203,15 @@ impl KeyBindings {
                 ]
                 .into(),
                 UiEvent::ToggleGrid.into(),
+            ),
+            // LAYER FILTERS
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyPress(mq::KeyCode::F.into()),
+                ]
+                .into(),
+                UiEvent::ToggleFilters.into(),
             ),
             // DRAWING
             (

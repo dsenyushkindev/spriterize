@@ -6,10 +6,11 @@ use macroquad::prelude::*;
 use std::collections::HashMap;
 
 const TOOL_BTN_IMG_SIZE: Size<usize> = Size { x: 16, y: 16 };
-const TOOLS: [Tool; 9] = [
+const TOOLS: [Tool; 10] = [
     Tool::Brush,
     Tool::Bucket,
     Tool::Eraser,
+    Tool::Smooth,
     Tool::Eyedropper,
     Tool::Line,
     Tool::Selection,
@@ -58,7 +59,12 @@ impl Toolbar {
             // noise for the others.
             if matches!(
                 selected_tool,
-                Tool::Brush | Tool::Eraser | Tool::Line | Tool::Rectangle | Tool::Ellipse
+                Tool::Brush
+                    | Tool::Eraser
+                    | Tool::Smooth
+                    | Tool::Line
+                    | Tool::Rectangle
+                    | Tool::Ellipse
             ) {
                 ui.separator();
 
@@ -153,6 +159,7 @@ impl ToolButton {
             Tool::Move => "move tool (M)",
             Tool::Rectangle => "rectangle tool (R)",
             Tool::Ellipse => "ellipse tool (O)",
+            Tool::Smooth => "smooth tool (K): soften edges between colors",
         }
     }
 }

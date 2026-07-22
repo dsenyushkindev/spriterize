@@ -221,25 +221,20 @@ pub fn draw_spritesheet_boundaries(ctx: DrawContext) {
 }
 
 pub fn draw_canvas(state: &UiState) {
-    for i in 0..state.num_layers() {
-        if !state.layer(i).visible() {
-            continue;
-        }
+    // One texture for the whole stack: visibility, opacity and filters are
+    // already baked into it.
+    let texture = state.canvas_texture();
+    let size = Size::new(texture.width(), texture.height());
+    let p = state.canvas_pos() - state.camera();
+    let scale = state.zoom();
 
-        let texture = state.layer_tex(i);
-        let size = Size::new(texture.width(), texture.height());
-        let p = state.canvas_pos() - state.camera();
-        let scale = state.zoom();
+    let params = DrawTextureParams {
+        dest_size: Some(Vec2 {
+            x: size.x * scale,
+            y: size.y * scale,
+        }),
+        ..Default::default()
+    };
 
-        let params = DrawTextureParams {
-            dest_size: Some(Vec2 {
-                x: size.x * scale,
-                y: size.y * scale,
-            }),
-            ..Default::default()
-        };
-
-        let color = [255, 255, 255, state.layer(i).opacity()];
-        macroquad::prelude::draw_texture_ex(texture, p.x, p.y, color.into(), params);
-    }
+    macroquad::prelude::draw_texture_ex(texture, p.x, p.y, WHITE, params);
 }

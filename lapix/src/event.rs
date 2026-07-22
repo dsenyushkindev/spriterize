@@ -1,4 +1,4 @@
-pub use crate::{Bitmap, CanvasEffect, Color, Point, Position, Size, Tool, Transform};
+pub use crate::{Bitmap, CanvasEffect, Color, Filter, Point, Position, Size, Tool, Transform};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -61,6 +61,13 @@ pub enum Event {
     SavePalette(PathBuf),
     /// Apply bucket to a point (fill with color)
     Bucket(Point<i32>),
+    /// Similar to `BrushStart`, but for the smooth tool
+    SmoothStart,
+    /// Similar to `BrushEnd`, but for the smooth tool
+    SmoothEnd,
+    /// Similar to `BrushStroke`, but softens the edges between colors under the
+    /// brush instead of painting
+    SmoothStroke(Position<i32>),
     /// Similar to `BrushStart`, but for eraser
     EraseStart,
     /// Similar to `BrushEnd`, but for eraser
@@ -97,6 +104,14 @@ pub enum Event {
     DeleteLayer(usize),
     /// Rename the layer at index
     RenameLayer(usize, String),
+    /// Replace the filter chain of the layer at index. Adding, removing and
+    /// reordering all go through this, so each change is one step to undo.
+    SetLayerFilters(usize, Vec<Filter>),
+    /// Show the layers with their filters applied, or as they are stored
+    SetFiltersEnabled(bool),
+    /// Make the layer at index filter everything below it instead of holding
+    /// pixels of its own, or go back to being drawn on
+    SetLayerAdjustment(usize, bool),
     /// Move the layer at specified index down (swap positions with the layer
     /// below it)
     MoveLayerDown(usize),
@@ -163,6 +178,7 @@ impl Event {
             | Self::FlipHorizontal
             | Self::FlipVertical
             | Self::ApplyTransform(_)
+            | Self::SmoothStroke(_)
             | Self::Erase(_) => CanvasEffect::Update,
             Self::ResizeCanvas(_) | Self::OpenFile(_) => CanvasEffect::New,
             Self::NewLayerAbove
@@ -170,6 +186,9 @@ impl Event {
             | Self::DeleteLayer(_)
             | Self::MoveLayerDown(_)
             | Self::MoveLayerUp(_)
+            | Self::SetLayerFilters(_, _)
+            | Self::SetFiltersEnabled(_)
+            | Self::SetLayerAdjustment(_, _)
             | Self::LoadProject(_) => CanvasEffect::Layer,
             x if x.triggers_anchoring() => CanvasEffect::Update,
             _ => CanvasEffect::None,
@@ -215,6 +234,9 @@ impl Event {
                 | Self::BrushStart
                 | Self::BrushStroke(_)
                 | Self::BrushEnd
+                | Self::SmoothStart
+                | Self::SmoothStroke(_)
+                | Self::SmoothEnd
                 | Self::SetMainColor(_)
                 | Self::AddToPalette(_)
                 | Self::RemoveFromPalette(_)
@@ -244,6 +266,8 @@ impl Event {
                 | Self::MoveLayerDown(_)
                 | Self::MoveLayerUp(_)
                 | Self::ApplyTransform(_)
+                | Self::SetLayerFilters(_, _)
+                | Self::SetLayerAdjustment(_, _)
         )
     }
 

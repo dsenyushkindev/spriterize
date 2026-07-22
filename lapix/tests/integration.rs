@@ -5,6 +5,28 @@ use lapix::color::{BLACK, TRANSPARENT};
 use lapix::{Color, Event, Point, Size, State};
 
 #[cfg(feature = "test-utils")]
+fn smooth_with(strength: i32, passes: i32) -> lapix::Filter {
+    use lapix::filter::Value;
+
+    let mut filter = lapix::Filter::smooth();
+    filter.params.set("strength", Value::Int(strength));
+    filter.params.set("passes", Value::Int(passes));
+
+    filter
+}
+
+#[cfg(feature = "test-utils")]
+fn silhouette_with(color: Color, threshold: i32) -> lapix::Filter {
+    use lapix::filter::Value;
+
+    let mut filter = lapix::Filter::silhouette();
+    filter.params.set("color", Value::Color(color));
+    filter.params.set("threshold", Value::Int(threshold));
+
+    filter
+}
+
+#[cfg(feature = "test-utils")]
 #[test]
 fn empty_canvas() {
     let side = 10;
@@ -345,6 +367,578 @@ fn a_thick_preview_is_not_clipped_at_its_corners() {
     assert_eq!(thick.rect.h, thin.rect.h + 2 * radius as i32);
     assert_eq!(thick.rect.x, thin.rect.x - radius as i32);
     assert_eq!(thick.rect.y, thin.rect.y - radius as i32);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn smoothing_softens_a_hard_edge() {
+    use lapix::{Bitmap, Transform};
+
+    // A black half and a white half meeting down the middle.
+    let white = Color::new(255, 255, 255, 255);
+    let mut img = TestImage::new(Size::new(6, 3), white);
+
+    for j in 0..3 {
+        for i in 0..3 {
+            img.set_pixel(Point::new(i, j), BLACK);
+        }
+    }
+
+    Transform::Smooth.apply(&mut img, Vec::new());
+
+    let left = img.pixel(Point::new(2, 1));
+    let right = img.pixel(Point::new(3, 1));
+
+    // The two pixels either side of the seam become intermediate shades.
+    assert!(left.r > 0 && left.r < 255, "left of the seam: {left:?}");
+    assert!(right.r > 0 && right.r < 255, "right of the seam: {right:?}");
+    assert!(left.r < right.r, "the gradient should run dark to light");
+
+    // Away from the seam the original colors survive.
+    assert_eq!(img.pixel(Point::new(0, 1)), BLACK);
+    assert_eq!(img.pixel(Point::new(5, 1)), white);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn smoothing_does_not_darken_edges_against_transparency() {
+    use lapix::{Bitmap, Transform};
+
+    // Transparent pixels are transparent black, so averaging colors without
+    // weighting them by alpha would pull a dark fringe into the red square.
+    let red = Color::new(255, 0, 0, 255);
+    let mut img = TestImage::new(Size::new(5, 5), TRANSPARENT);
+
+    for j in 1..4 {
+        for i in 1..4 {
+            img.set_pixel(Point::new(i, j), red);
+        }
+    }
+
+    Transform::Smooth.apply(&mut img, Vec::new());
+
+    for j in 1..4 {
+        for i in 1..4 {
+            let color = img.pixel(Point::new(i, j));
+
+            assert_eq!(
+                (color.r, color.g, color.b),
+                (255, 0, 0),
+                "at {i},{j} the hue should stay red, only the alpha softens"
+            );
+        }
+    }
+
+    // The edge does become partly transparent, which is the softening.
+    assert!(img.pixel(Point::new(1, 1)).a < 255);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn the_smooth_tool_only_touches_what_it_is_dragged_over() {
+    use lapix::Bitmap;
+
+    let white = Color::new(255, 255, 255, 255);
+    let side = 12;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    // A hard vertical seam down the middle.
+    state.execute(Event::SetMainColor(BLACK)).unwrap();
+    state.execute(Event::RectStart(Point::new(0, 0))).unwrap();
+    state.execute(Event::SetMainColor(white)).unwrap();
+
+    let mut img = TestImage::new(Size::new(side, side), white);
+    for j in 0..side {
+        for i in 0..side / 2 {
+            img.set_pixel(Point::new(i, j), BLACK);
+        }
+    }
+    state.execute(Event::ClearCanvas).unwrap();
+    state.canvas_mut().set_img(img);
+
+    // Smooth only near the top of the seam.
+    state.execute(Event::SetBrushRadius(1)).unwrap();
+    state.execute(Event::SmoothStart).unwrap();
+    state
+        .execute(Event::SmoothStroke(Point::new(6, 1)))
+        .unwrap();
+    state.execute(Event::SmoothEnd).unwrap();
+
+    let touched = state.canvas().pixel(Point::new(6, 1));
+    let untouched = state.canvas().pixel(Point::new(6, 9));
+
+    assert!(
+        touched.r > 0 && touched.r < 255,
+        "the pixel under the brush should soften: {touched:?}"
+    );
+    assert_eq!(
+        untouched, white,
+        "the same seam further down should be untouched"
+    );
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn smoothing_leaves_a_flat_image_alone() {
+    use lapix::{Bitmap, Transform};
+
+    let blue = Color::new(0, 0, 255, 255);
+    let mut img = TestImage::new(Size::new(4, 4), blue);
+
+    Transform::Smooth.apply(&mut img, Vec::new());
+
+    for j in 0..4 {
+        for i in 0..4 {
+            assert_eq!(img.pixel(Point::new(i, j)), blue, "at {i},{j}");
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_filter_changes_what_is_seen_but_not_what_is_stored() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 8;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    // A single dot, so it has edges to soften against.
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(4, 4))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+    state
+        .execute(Event::SetLayerFilters(0, vec![Filter::smooth()]))
+        .unwrap();
+
+    // The stored pixel is untouched...
+    assert_eq!(state.canvas().pixel(Point::new(4, 4)), BLACK);
+    // ...but what is shown has softened into its surroundings.
+    assert!(state.rendered_layer(0).pixel(Point::new(4, 4)).a < 255);
+    assert!(state.rendered_layer(0).pixel(Point::new(3, 4)).a > 0);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn turning_filters_off_shows_the_pixels_as_drawn() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 8;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::Bucket(Point::new(0, 0))).unwrap();
+    state
+        .execute(Event::SetLayerFilters(0, vec![Filter::smooth()]))
+        .unwrap();
+    state.execute(Event::SetFiltersEnabled(false)).unwrap();
+
+    assert!(!state.filters_enabled());
+    assert_eq!(state.rendered_layer(0).pixel(Point::new(0, 0)), BLACK);
+    // What the eyedropper reads follows the same switch.
+    assert_eq!(state.visible_pixel(Point::new(0, 0)), BLACK);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn filter_changes_can_be_undone() {
+    use lapix::Filter;
+
+    let side = 8;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state
+        .execute(Event::SetLayerFilters(0, vec![Filter::smooth()]))
+        .unwrap();
+    assert_eq!(state.layers().get(0).filters(), &[Filter::smooth()]);
+
+    state
+        .execute(Event::SetLayerFilters(
+            0,
+            vec![Filter::smooth(), Filter::silhouette()],
+        ))
+        .unwrap();
+    assert_eq!(state.layers().get(0).filters().len(), 2);
+
+    state.execute(Event::Undo).unwrap();
+    assert_eq!(state.layers().get(0).filters(), &[Filter::smooth()]);
+
+    state.execute(Event::Undo).unwrap();
+    assert!(state.layers().get(0).filters().is_empty());
+
+    state.execute(Event::Redo).unwrap();
+    assert_eq!(state.layers().get(0).filters(), &[Filter::smooth()]);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn drawing_on_a_filtered_layer_refreshes_what_is_shown() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 8;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state
+        .execute(Event::SetLayerFilters(0, vec![Filter::silhouette()]))
+        .unwrap();
+    // Nothing drawn yet, so nothing to see.
+    assert_eq!(state.rendered_layer(0).pixel(Point::new(4, 4)), TRANSPARENT);
+
+    let red = Color::new(255, 0, 0, 255);
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(4, 4))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // The cached result has to be dropped when pixels change, or this would
+    // still be transparent.
+    assert_eq!(state.rendered_layer(0).pixel(Point::new(4, 4)), BLACK);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn an_adjustment_layer_filters_the_layers_below_it() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 8;
+    let red = Color::new(255, 0, 0, 255);
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    // A red dot on the bottom layer.
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(4, 4))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // An empty layer above it, turned into an adjustment layer.
+    state.execute(Event::NewLayerAbove).unwrap();
+    state.execute(Event::SetLayerAdjustment(1, true)).unwrap();
+    state
+        .execute(Event::SetLayerFilters(1, vec![Filter::silhouette()]))
+        .unwrap();
+
+    // The dot below is flattened to black even though the layer holding it has
+    // no filters of its own, and its own pixels are untouched.
+    assert_eq!(state.layers().canvas_at(0).pixel(Point::new(4, 4)), red);
+    assert_eq!(state.visible_pixel(Point::new(4, 4)), BLACK);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn an_adjustment_layer_leaves_the_layers_above_it_alone() {
+    use lapix::Filter;
+
+    let side = 8;
+    let red = Color::new(255, 0, 0, 255);
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    // Bottom layer: nothing. Middle: adjustment. Top: a red dot.
+    state.execute(Event::NewLayerAbove).unwrap();
+    state.execute(Event::SetLayerAdjustment(1, true)).unwrap();
+    state
+        .execute(Event::SetLayerFilters(1, vec![Filter::silhouette()]))
+        .unwrap();
+
+    state.execute(Event::NewLayerAbove).unwrap();
+    state.execute(Event::SwitchLayer(2)).unwrap();
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(4, 4))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // Sitting above the adjustment layer, it keeps its color.
+    assert_eq!(state.visible_pixel(Point::new(4, 4)), red);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn hiding_an_adjustment_layer_undoes_its_effect() {
+    use lapix::Filter;
+
+    let side = 8;
+    let red = Color::new(255, 0, 0, 255);
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(4, 4))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    state.execute(Event::NewLayerAbove).unwrap();
+    state.execute(Event::SetLayerAdjustment(1, true)).unwrap();
+    state
+        .execute(Event::SetLayerFilters(1, vec![Filter::silhouette()]))
+        .unwrap();
+    assert_eq!(state.visible_pixel(Point::new(4, 4)), BLACK);
+
+    // Each of these has to drop the flattened image, or the effect would linger.
+    state
+        .execute(Event::ChangeLayerVisibility(1, false))
+        .unwrap();
+    assert_eq!(state.visible_pixel(Point::new(4, 4)), red);
+
+    state
+        .execute(Event::ChangeLayerVisibility(1, true))
+        .unwrap();
+    assert_eq!(state.visible_pixel(Point::new(4, 4)), BLACK);
+
+    state.execute(Event::SetFiltersEnabled(false)).unwrap();
+    assert_eq!(state.visible_pixel(Point::new(4, 4)), red);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn making_a_layer_an_adjustment_can_be_undone() {
+    let side = 8;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::SetLayerAdjustment(0, true)).unwrap();
+    assert!(state.layers().get(0).is_adjustment());
+
+    state.execute(Event::Undo).unwrap();
+    assert!(!state.layers().get(0).is_adjustment());
+
+    state.execute(Event::Redo).unwrap();
+    assert!(state.layers().get(0).is_adjustment());
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_filter_at_zero_strength_changes_nothing() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 8;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(4, 4))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    state
+        .execute(Event::SetLayerFilters(0, vec![smooth_with(0, 4)]))
+        .unwrap();
+
+    assert_eq!(state.rendered_layer(0).pixel(Point::new(4, 4)), BLACK);
+    assert_eq!(
+        state.rendered_layer(0).pixel(Point::new(3, 4)),
+        TRANSPARENT,
+        "nothing should bleed outwards at zero strength"
+    );
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn smoothing_strength_controls_how_far_it_goes() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 8;
+    let dot = Point::new(4, 4);
+
+    let alpha_at = |strength: i32| {
+        let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+        state.execute(Event::BrushStart).unwrap();
+        state.execute(Event::BrushStroke(dot)).unwrap();
+        state.execute(Event::BrushEnd).unwrap();
+        state
+            .execute(Event::SetLayerFilters(0, vec![smooth_with(strength, 1)]))
+            .unwrap();
+
+        // Bound before returning, so the borrow of `state` ends first.
+        let alpha = state.rendered_layer(0).pixel(dot).a;
+
+        alpha
+    };
+
+    // The more strength, the more the dot spreads out, so the less is left in
+    // the middle.
+    assert!(alpha_at(64) > alpha_at(128));
+    assert!(alpha_at(128) > alpha_at(255));
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn more_passes_spread_a_blur_further() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 12;
+    let dot = Point::new(6, 6);
+    let far = Point::new(8, 6);
+
+    let alpha_after = |passes: i32| {
+        let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+        state.execute(Event::BrushStart).unwrap();
+        state.execute(Event::BrushStroke(dot)).unwrap();
+        state.execute(Event::BrushEnd).unwrap();
+        state
+            .execute(Event::SetLayerFilters(0, vec![smooth_with(255, passes)]))
+            .unwrap();
+
+        let alpha = state.rendered_layer(0).pixel(far).a;
+
+        alpha
+    };
+
+    // One pass of a 3x3 kernel can't reach two pixels away; several can.
+    assert_eq!(alpha_after(1), 0);
+    assert!(alpha_after(3) > 0);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn silhouette_settings_choose_the_color_and_the_cutoff() {
+    use lapix::{Bitmap, Filter};
+
+    let side = 6;
+    let faint = Color::new(255, 255, 255, 100);
+    let blue = Color::new(0, 0, 255, 255);
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::SetMainColor(faint)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(3, 3))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // Too faint to reach the default cutoff, so it is left alone.
+    state
+        .execute(Event::SetLayerFilters(0, vec![silhouette_with(blue, 128)]))
+        .unwrap();
+    assert_eq!(state.rendered_layer(0).pixel(Point::new(3, 3)), faint);
+
+    // Lower the cutoff and it is filled, with the chosen color.
+    state
+        .execute(Event::SetLayerFilters(0, vec![silhouette_with(blue, 50)]))
+        .unwrap();
+    assert_eq!(state.rendered_layer(0).pixel(Point::new(3, 3)), blue);
+}
+
+/// A filter that only exists in this test, to show that registering one is
+/// enough to make it work everywhere.
+#[cfg(feature = "test-utils")]
+struct Invert;
+
+#[cfg(feature = "test-utils")]
+impl lapix::filter::FilterKind for Invert {
+    fn id(&self) -> &'static str {
+        "test_invert"
+    }
+
+    fn name(&self) -> &'static str {
+        "Invert"
+    }
+
+    fn params(&self) -> &'static [lapix::filter::ParamSpec] {
+        use lapix::filter::{ParamKind, ParamSpec, Value};
+
+        &[ParamSpec {
+            id: "alpha_too",
+            label: "invert alpha",
+            kind: ParamKind::Bool,
+            default: Value::Bool(false),
+            help: "flip the alpha channel as well",
+        }]
+    }
+
+    fn apply(
+        &self,
+        surface: &mut dyn lapix::filter::Surface,
+        params: &lapix::filter::Params,
+        _palette: &[Color],
+    ) {
+        let alpha_too = params.bool("alpha_too", false);
+        let size = surface.size();
+
+        for i in 0..size.x {
+            for j in 0..size.y {
+                let p = Point::new(i, j);
+                let c = surface.pixel(p);
+                let alpha = if alpha_too { 255 - c.a } else { c.a };
+
+                surface.set_pixel(p, Color::new(255 - c.r, 255 - c.g, 255 - c.b, alpha));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_registered_filter_can_be_looked_up_and_run() {
+    use lapix::{filter, Bitmap};
+
+    assert!(filter::register(Invert), "should register the first time");
+    assert!(
+        !filter::register(Invert),
+        "an id that is taken should be refused"
+    );
+
+    let kind = filter::kind("test_invert").expect("just registered");
+    assert_eq!(kind.name(), "Invert");
+    assert!(filter::kinds().iter().any(|k| k.id() == "test_invert"));
+
+    // Its declared settings become its starting settings.
+    let inverted = lapix::Filter::new(kind);
+    assert!(!inverted.params.bool("alpha_too", true));
+
+    let side = 4;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+    state.execute(Event::Bucket(Point::new(0, 0))).unwrap();
+    state
+        .execute(Event::SetLayerFilters(0, vec![inverted]))
+        .unwrap();
+
+    // Black filled, so inverting shows white.
+    let seen = state.rendered_layer(0).pixel(Point::new(1, 1));
+    assert_eq!((seen.r, seen.g, seen.b), (255, 255, 255));
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_filter_from_an_unknown_kind_is_left_alone() {
+    use lapix::filter::Params;
+    use lapix::{Bitmap, Filter};
+
+    let side = 4;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+    state.execute(Event::Bucket(Point::new(0, 0))).unwrap();
+
+    // As a project saved by a build that had a filter this one doesn't.
+    let unknown = Filter {
+        id: "not_a_real_filter".to_owned(),
+        params: Params::default(),
+    };
+    state
+        .execute(Event::SetLayerFilters(0, vec![unknown.clone()]))
+        .unwrap();
+
+    assert_eq!(unknown.name(), "Unknown (not_a_real_filter)");
+    assert!(unknown.kind().is_none());
+    // Opens and draws rather than failing.
+    assert_eq!(state.rendered_layer(0).pixel(Point::new(1, 1)), BLACK);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_setting_that_was_never_saved_falls_back_to_its_default() {
+    use lapix::filter::Params;
+    use lapix::{Bitmap, Filter};
+
+    let side = 6;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(3, 3))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // As a project saved before the filter grew its settings.
+    let bare = Filter {
+        id: "smooth".to_owned(),
+        params: Params::default(),
+    };
+    state
+        .execute(Event::SetLayerFilters(0, vec![bare]))
+        .unwrap();
+
+    // Full strength, one pass: what the defaults say.
+    assert!(state.rendered_layer(0).pixel(Point::new(3, 3)).a < 255);
 }
 
 #[cfg(feature = "test-utils")]

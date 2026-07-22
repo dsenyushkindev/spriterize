@@ -13,6 +13,8 @@ pub enum Tool {
     Move,
     Rectangle,
     Ellipse,
+    /// Softens the edges between colors where it is dragged
+    Smooth,
 }
 
 impl Display for Tool {
@@ -27,6 +29,7 @@ impl Display for Tool {
             Self::Move => "move",
             Self::Rectangle => "rectangle",
             Self::Ellipse => "ellipse",
+            Self::Smooth => "smooth",
         };
 
         f.write_str(st)

@@ -1,4 +1,4 @@
-use crate::{Bitmap, CanvasEffect, Color, Layer, Layers, Point};
+use crate::{Bitmap, CanvasEffect, Color, Filter, Layer, Layers, Point};
 use std::fmt::Debug;
 
 pub type LayerIndex = usize;
@@ -77,6 +77,8 @@ pub enum AtomicAction<IMG> {
     DestroyLayer(LayerIndex),
     CreateLayer(LayerIndex, Layer<IMG>),
     SetLayerCanvas(LayerIndex, IMG),
+    SetLayerFilters(LayerIndex, Vec<Filter>),
+    SetLayerAdjustment(LayerIndex, bool),
 }
 
 impl<IMG> Debug for AtomicAction<IMG> {
@@ -91,6 +93,16 @@ impl<IMG> Debug for AtomicAction<IMG> {
             Self::DestroyLayer(i) => f.debug_tuple("DestroyLayer").field(&i).finish(),
             Self::CreateLayer(i, _) => f.debug_tuple("CreateLayer").field(&i).finish(),
             Self::SetLayerCanvas(i, _) => f.debug_tuple("SetLayerCanvas").field(&i).finish(),
+            Self::SetLayerFilters(i, filters) => f
+                .debug_tuple("SetLayerFilters")
+                .field(&i)
+                .field(&filters)
+                .finish(),
+            Self::SetLayerAdjustment(i, adjustment) => f
+                .debug_tuple("SetLayerAdjustment")
+                .field(&i)
+                .field(&adjustment)
+                .finish(),
         }
     }
 }
@@ -124,6 +136,13 @@ impl<IMG: Bitmap> AtomicAction<IMG> {
                 layers.canvas_at_mut(i).set_img(img);
                 Some(Self::SetLayerCanvas(i, old_img))
             }
+            Self::SetLayerFilters(i, filters) => {
+                Some(Self::SetLayerFilters(i, layers.set_filters(i, filters)))
+            }
+            Self::SetLayerAdjustment(i, adjustment) => Some(Self::SetLayerAdjustment(
+                i,
+                layers.set_adjustment(i, adjustment),
+            )),
         };
 
         (CanvasEffect::Layer, inverse)

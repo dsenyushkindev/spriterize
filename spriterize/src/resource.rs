@@ -23,6 +23,7 @@ impl Resources {
             Tool::Move => include_bytes!("../res/icon/move.png"),
             Tool::Rectangle => include_bytes!("../res/icon/rectangle.png"),
             Tool::Ellipse => include_bytes!("../res/icon/ellipse.png"),
+            Tool::Smooth => include_bytes!("../res/icon/smooth.png"),
         }
     }
 }

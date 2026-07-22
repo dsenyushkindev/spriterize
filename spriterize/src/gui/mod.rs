@@ -1,6 +1,6 @@
 use crate::settings::Settings;
 use crate::{Effect, UiEvent, UiState};
-use lapix::{Position, Size, Tool};
+use lapix::{Filter, Position, Size, Tool};
 use macroquad::prelude::*;
 use std::path::PathBuf;
 
@@ -30,6 +30,9 @@ pub struct GuiSyncParams {
     pub layers_vis: Vec<bool>,
     pub layers_alpha: Vec<u8>,
     pub layers_names: Vec<String>,
+    pub layers_filters: Vec<Vec<Filter>>,
+    pub layers_adjustment: Vec<bool>,
+    pub filters_enabled: bool,
     pub palette: Vec<[u8; 4]>,
     pub mouse_canvas: Position<i32>,
     pub is_on_canvas: bool,
@@ -117,6 +120,9 @@ impl Gui {
             params.layers_vis.clone(),
             params.layers_alpha.clone(),
             params.layers_names.clone(),
+            params.layers_filters.clone(),
+            params.layers_adjustment.clone(),
+            params.filters_enabled,
         );
         self.preview.sync(
             params.spritesheet,
@@ -135,6 +141,7 @@ impl Gui {
             params.can_redo,
             params.recent_files.clone(),
             params.new_project_requested,
+            params.filters_enabled,
         );
         self.status_bar.sync(params);
     }

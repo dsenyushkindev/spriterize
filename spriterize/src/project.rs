@@ -9,7 +9,9 @@ use std::path::PathBuf;
 /// rather than being read as nonsense.
 ///
 /// - `..0xee`: before layers had names.
-const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xef];
+/// - `..0xef`: before layers had filters and could be adjustment layers.
+/// - `..0xf0`: before filters carried their own settings.
+const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xf1];
 
 pub fn save(path: PathBuf, bytes: Vec<u8>) {
     use std::io::Write;

@@ -76,6 +76,7 @@ pub enum UiEvent {
     ZoomAdd(f32),
     ZoomMul(f32),
     ToggleGrid,
+    ToggleFilters,
     SetUiScale(f32),
     OpenSettings,
     ResetLayout,
@@ -139,6 +140,13 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             layers_names: (0..n_layers)
                 .map(|i| state.inner.layers().get(i).name().to_owned())
                 .collect(),
+            layers_filters: (0..n_layers)
+                .map(|i| state.inner.layers().get(i).filters().to_vec())
+                .collect(),
+            layers_adjustment: (0..n_layers)
+                .map(|i| state.inner.layers().get(i).is_adjustment())
+                .collect(),
+            filters_enabled: state.inner.filters_enabled(),
             palette: state.inner.palette().iter().map(|c| (*c).into()).collect(),
             mouse_canvas: (x, y).into(),
             is_on_canvas: in_canvas,
@@ -171,7 +179,12 @@ pub struct UiState {
     /// Screen size as of the last time the canvas was centered. Starts at zero
     /// so that the first frame always centers.
     last_screen_size: Size<f32>,
-    layer_textures: Vec<Texture2D>,
+    /// The whole stack flattened into one texture.
+    ///
+    /// One texture rather than one per layer because an adjustment layer
+    /// filters everything below it, which the GPU can't express by blending
+    /// layers separately.
+    canvas_texture: Texture2D,
     input: InputManager,
     mouse: MouseManager,
     mouse_over_gui: bool,
@@ -221,7 +234,7 @@ impl Default for UiState {
             zoom: DEFAULT_ZOOM_LEVEL,
             settings: Settings::load(),
             last_screen_size: Size::ZERO_F32,
-            layer_textures: vec![drawing],
+            canvas_texture: drawing,
             input,
             mouse: MouseManager::new(),
             mouse_over_gui: false,
@@ -247,12 +260,9 @@ impl UiState {
         self.must_exit
     }
 
-    /*pub fn drawing_mut(&mut self) -> &mut Texture2D {
-        &mut self.layer_textures[self.inner.layers().active_index()]
-    }*/
-
-    pub fn drawing(&self) -> &Texture2D {
-        &self.layer_textures[self.inner.layers().active_index()]
+    /// The flattened canvas, ready to draw
+    pub fn canvas_texture(&self) -> &Texture2D {
+        &self.canvas_texture
     }
 
     pub fn update(&mut self, frame: usize) -> Result<()> {
@@ -435,7 +445,7 @@ impl UiState {
         // Once a shape is being dragged its own preview shows the whole stroke,
         // and the dot would only be in the way.
         let stamps = match self.selected_tool() {
-            Tool::Brush | Tool::Eraser => true,
+            Tool::Brush | Tool::Eraser | Tool::Smooth => true,
             Tool::Line | Tool::Rectangle => self.shape_start.is_none(),
             _ => false,
         };
@@ -613,11 +623,17 @@ impl UiState {
         match effect {
             // TODO: Texture2D is copy, so we don't need `drawing_mut` here, but
             // it would be better.
+            // Re-uploads the flattened stack, so filters and adjustment layers
+            // are included in what gets drawn.
             CanvasEffect::Update => {
-                self.drawing().update(&self.canvas().inner().0);
+                let composite = self.inner.composite();
+
+                self.canvas_texture.update(&composite.0);
             }
+            // The canvas may have changed size, so the texture is rebuilt
+            // rather than written over.
             CanvasEffect::New | CanvasEffect::Layer => {
-                self.sync_layer_textures();
+                self.sync_canvas_texture();
             }
             CanvasEffect::None => (),
         };
@@ -625,21 +641,17 @@ impl UiState {
         Ok(())
     }
 
-    pub fn sync_layer_textures(&mut self) {
-        for layer in 0..self.inner.layers().count() {
-            self.sync_layer_texture(layer);
-        }
-    }
+    /// Rebuilds the canvas texture from the flattened stack.
+    pub fn sync_canvas_texture(&mut self) {
+        let texture = {
+            let composite = self.inner.composite();
+            let texture = Texture2D::from_image(&composite.0);
+            texture.set_filter(FilterMode::Nearest);
 
-    pub fn sync_layer_texture(&mut self, index: usize) {
-        let layer_img = &self.inner.layers().canvas_at(index).inner().0;
-        let texture = Texture2D::from_image(layer_img);
-        texture.set_filter(FilterMode::Nearest);
+            texture
+        };
 
-        match self.layer_textures.get_mut(index) {
-            Some(tex) => *tex = texture,
-            None => self.layer_textures.push(texture),
-        }
+        self.canvas_texture = texture;
     }
 
     pub fn process_event(&mut self, event: UiEvent) -> Result<()> {
@@ -669,6 +681,11 @@ impl UiState {
                 // The tool windows change size with the scale, so the space the
                 // canvas is centered in changes too.
                 self.center_canvas();
+            }
+            UiEvent::ToggleFilters => {
+                let enabled = self.inner.filters_enabled();
+
+                self.execute(Event::SetFiltersEnabled(!enabled))?;
             }
             UiEvent::OpenSettings => self.gui.open_settings(),
             UiEvent::ResetLayout => self.gui.reset_layout(),
@@ -741,6 +758,7 @@ impl UiState {
                 match (self.selected_tool(), self.is_canvas_blocked()) {
                     (Tool::Brush, false) => self.execute(Event::BrushStart)?,
                     (Tool::Eraser, false) => self.execute(Event::EraseStart)?,
+                    (Tool::Smooth, false) => self.execute(Event::SmoothStart)?,
                     (Tool::Line, false) => {
                         self.shape_start = Some(p);
                         self.execute(Event::LineStart(p))?
@@ -769,11 +787,13 @@ impl UiState {
             UiEvent::ToolStroke => match (self.selected_tool(), self.is_canvas_blocked()) {
                 (Tool::Brush, false) => self.execute(Event::BrushStroke(p))?,
                 (Tool::Eraser, false) => self.execute(Event::Erase(p))?,
+                (Tool::Smooth, false) => self.execute(Event::SmoothStroke(p))?,
                 _ => (),
             },
             UiEvent::ToolEnd => match (self.selected_tool(), self.is_canvas_blocked()) {
                 (Tool::Brush, false) => self.execute(Event::BrushEnd)?,
                 (Tool::Eraser, false) => self.execute(Event::EraseEnd)?,
+                (Tool::Smooth, false) => self.execute(Event::SmoothEnd)?,
                 // Constrained before the shape is committed, so it lands exactly
                 // where the preview showed it.
                 (Tool::Line, false) => {
@@ -810,7 +830,9 @@ impl UiState {
     }
 
     pub fn visible_pixel(&self, p: Point<i32>) -> [u8; 4] {
-        self.inner.layers().visible_pixel(p).into()
+        // Goes through the state so filters are taken into account: the
+        // eyedropper picks up what is actually on screen.
+        self.inner.visible_pixel(p).into()
     }
 
     pub fn camera(&self) -> Position<f32> {
@@ -847,10 +869,6 @@ impl UiState {
 
     pub fn num_layers(&self) -> usize {
         self.inner.layers().count()
-    }
-
-    pub fn layer_tex(&self, index: usize) -> &Texture2D {
-        &self.layer_textures[index]
     }
 
     pub fn zoom_in(&mut self) {

@@ -14,6 +14,7 @@ pub struct MenuBar {
     spritesheet_str: Option<(String, String)>,
     can_undo: bool,
     can_redo: bool,
+    filters_enabled: bool,
 }
 
 impl MenuBar {
@@ -30,6 +31,7 @@ impl MenuBar {
             spritesheet_str: None,
             can_undo: false,
             can_redo: false,
+            filters_enabled: true,
         }
     }
 
@@ -42,12 +44,14 @@ impl MenuBar {
         can_redo: bool,
         recent_files: Vec<PathBuf>,
         new_project_requested: bool,
+        filters_enabled: bool,
     ) {
         self.canvas_size = canvas_size;
         self.spritesheet = spritesheet;
         self.can_undo = can_undo;
         self.can_redo = can_redo;
         self.recent_files = recent_files;
+        self.filters_enabled = filters_enabled;
 
         // The New Project shortcut goes through the same confirmation as the
         // menu entry, rather than discarding the project outright.
@@ -174,6 +178,21 @@ impl MenuBar {
                         events.push(Effect::UiEvent(UiEvent::ToggleGrid));
                         ui.close_menu();
                     }
+                    if ui
+                        .add(
+                            egui::Button::new(if self.filters_enabled {
+                                "Hide layer filters"
+                            } else {
+                                "Show layer filters"
+                            })
+                            .shortcut_text("Ctrl+F"),
+                        )
+                        .on_hover_text("show the layers as drawn, ignoring their filters")
+                        .clicked()
+                    {
+                        events.push(Effect::UiEvent(UiEvent::ToggleFilters));
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui
                         .button("Reset Window Layout")
@@ -217,6 +236,14 @@ impl MenuBar {
                     if ui.button("Apply palette").clicked() {
                         ui.close_menu();
                         events.push(Event::ApplyTransform(Transform::ApplyPalette).into());
+                    }
+                    if ui
+                        .button("Smooth")
+                        .on_hover_text("soften the edges between colors in the selection")
+                        .clicked()
+                    {
+                        ui.close_menu();
+                        events.push(Event::ApplyTransform(Transform::Smooth).into());
                     }
                 });
             });

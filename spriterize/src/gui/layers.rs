@@ -1,6 +1,113 @@
 use crate::gui::layout::{self, PanelLayout};
 use crate::Effect;
-use lapix::Event;
+use lapix::filter::{ParamKind, Value};
+use lapix::{Event, Filter};
+
+/// The settings of one filter. Returns the filter with them applied, if any
+/// were changed.
+///
+/// Built from what the filter declares rather than from a match on known
+/// filters, so a newly registered one gets working controls for free.
+fn filter_properties(ui: &mut egui::Ui, filter: &Filter) -> Option<Filter> {
+    let Some(kind) = filter.kind() else {
+        ui.weak("this filter isn't available in this build");
+        return None;
+    };
+    let specs = kind.params();
+
+    if specs.is_empty() {
+        ui.weak("nothing to adjust");
+        return None;
+    }
+
+    let mut params = filter.params.clone();
+    let mut changed = false;
+
+    for spec in specs {
+        ui.horizontal(|ui| {
+            ui.label(format!("{}:", spec.label));
+
+            let response = match spec.kind {
+                ParamKind::Ratio => {
+                    let mut value = params.int(spec.id, default_int(spec));
+                    let response = ui.add(
+                        egui::Slider::new(&mut value, 0..=lapix::filter::FULL_STRENGTH)
+                            .custom_formatter(|v, _| {
+                                format!("{:.0}%", v / lapix::filter::FULL_STRENGTH as f64 * 100.)
+                            }),
+                    );
+
+                    if response.changed() {
+                        params.set(spec.id, Value::Int(value));
+                    }
+
+                    response
+                }
+                ParamKind::Int { min, max } => {
+                    let mut value = params.int(spec.id, default_int(spec));
+                    let response = ui.add(egui::Slider::new(&mut value, min..=max));
+
+                    if response.changed() {
+                        params.set(spec.id, Value::Int(value));
+                    }
+
+                    response
+                }
+                ParamKind::Color => {
+                    let color = params.color(spec.id, default_color(spec));
+                    let mut rgba = [color.r, color.g, color.b, color.a];
+                    let response = ui.color_edit_button_srgba_unmultiplied(&mut rgba);
+
+                    if response.changed() {
+                        let color = lapix::Color::new(rgba[0], rgba[1], rgba[2], rgba[3]);
+                        params.set(spec.id, Value::Color(color));
+                    }
+
+                    response
+                }
+                ParamKind::Bool => {
+                    let mut value = params.bool(spec.id, default_bool(spec));
+                    let response = ui.checkbox(&mut value, "");
+
+                    if response.changed() {
+                        params.set(spec.id, Value::Bool(value));
+                    }
+
+                    response
+                }
+            };
+
+            changed |= response.changed();
+            response.on_hover_text(spec.help);
+        });
+    }
+
+    changed.then(|| Filter {
+        id: filter.id.clone(),
+        params,
+    })
+}
+
+fn default_int(spec: &lapix::filter::ParamSpec) -> i32 {
+    match spec.default {
+        Value::Int(v) => v,
+        _ => 0,
+    }
+}
+
+fn default_color(spec: &lapix::filter::ParamSpec) -> lapix::Color {
+    match spec.default {
+        Value::Color(c) => c,
+        _ => lapix::color::BLACK,
+    }
+}
+
+fn default_bool(spec: &lapix::filter::ParamSpec) -> bool {
+    match spec.default {
+        Value::Bool(v) => v,
+        _ => false,
+    }
+}
 
 /// Narrowest the layer name field is allowed to get, whatever the other columns
 /// need.
@@ -18,6 +125,11 @@ pub struct LayersPanel {
     layers_vis: Vec<bool>,
     layers_alpha: Vec<String>,
     layers_names: Vec<String>,
+    layers_filters: Vec<Vec<Filter>>,
+    layers_adjustment: Vec<bool>,
+    filters_enabled: bool,
+    /// Which layer's filter chain is expanded, if any.
+    editing_filters: Option<usize>,
     /// Width of the name field, set to whatever the other columns leave over.
     name_width: f32,
 }
@@ -30,10 +142,15 @@ impl LayersPanel {
             layers_vis: vec![true],
             layers_alpha: vec!["255".to_owned()],
             layers_names: vec!["Layer 1".to_owned()],
+            layers_filters: vec![Vec::new()],
+            layers_adjustment: vec![false],
+            filters_enabled: true,
+            editing_filters: None,
             name_width: MIN_NAME_WIDTH,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn sync(
         &mut self,
         num_layers: usize,
@@ -41,12 +158,108 @@ impl LayersPanel {
         layers_vis: Vec<bool>,
         layers_alpha: Vec<u8>,
         layers_names: Vec<String>,
+        layers_filters: Vec<Vec<Filter>>,
+        layers_adjustment: Vec<bool>,
+        filters_enabled: bool,
     ) {
         self.active_layer = active_layer;
         self.num_layers = num_layers;
         self.layers_vis = layers_vis;
         self.layers_alpha = layers_alpha.into_iter().map(|x| x.to_string()).collect();
         self.layers_names = layers_names;
+        self.layers_filters = layers_filters;
+        self.layers_adjustment = layers_adjustment;
+        self.filters_enabled = filters_enabled;
+
+        // A layer that was being edited may have been deleted.
+        if self.editing_filters.is_some_and(|i| i >= num_layers) {
+            self.editing_filters = None;
+        }
+    }
+
+    /// The row of filter controls for one layer, shown under it when expanded.
+    ///
+    /// Every change sends the whole chain back, so adding, removing and
+    /// reordering are all one step to undo.
+    fn filter_chain(&self, ui: &mut egui::Ui, layer: usize, events: &mut Vec<Effect>) {
+        let filters = &self.layers_filters[layer];
+        let mut changed: Option<Vec<Filter>> = None;
+
+        let mut adjustment = self.layers_adjustment[layer];
+
+        if ui
+            .checkbox(&mut adjustment, "apply to the layers below")
+            .on_hover_text(
+                "instead of filtering its own pixels, this layer filters everything \
+                 stacked beneath it",
+            )
+            .changed()
+        {
+            events.push(Event::SetLayerAdjustment(layer, adjustment).into());
+        }
+
+        if filters.is_empty() {
+            ui.weak("no filters");
+        }
+
+        // One block per filter, stacked, so each has room for its own settings.
+        for (i, filter) in filters.iter().enumerate() {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.strong(format!("{}. {}", i + 1, filter.name()));
+
+                    // Pushed to the right so the controls line up down the list.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("x").on_hover_text("remove filter").clicked() {
+                            let mut next = filters.clone();
+                            next.remove(i);
+                            changed = Some(next);
+                        }
+                        if ui
+                            .add_enabled(i + 1 < filters.len(), egui::Button::new("v"))
+                            .on_hover_text("run later")
+                            .clicked()
+                        {
+                            let mut next = filters.clone();
+                            next.swap(i, i + 1);
+                            changed = Some(next);
+                        }
+                        if ui
+                            .add_enabled(i > 0, egui::Button::new("^"))
+                            .on_hover_text("run earlier")
+                            .clicked()
+                        {
+                            let mut next = filters.clone();
+                            next.swap(i - 1, i);
+                            changed = Some(next);
+                        }
+                    });
+                });
+
+                if let Some(adjusted) = filter_properties(ui, filter) {
+                    let mut next = filters.clone();
+                    next[i] = adjusted;
+                    changed = Some(next);
+                }
+            });
+        }
+
+        // Offers whatever is registered, so a new filter shows up here without
+        // this needing to know about it.
+        ui.menu_button("add filter", |ui| {
+            for kind in lapix::filter::kinds() {
+                if ui.button(kind.name()).clicked() {
+                    let mut next = filters.clone();
+                    next.push(Filter::new(kind));
+                    changed = Some(next);
+                    ui.close_menu();
+                }
+            }
+        });
+
+        if let Some(filters) = changed {
+            events.push(Event::SetLayerFilters(layer, filters).into());
+        }
     }
 
     pub fn update(&mut self, egui_ctx: &egui::Context, layout: &PanelLayout) -> Vec<Effect> {
@@ -145,6 +358,22 @@ impl LayersPanel {
                                     events.push(Event::SwitchLayer(i + 1).into());
                                 }
                             });
+                            // Filter chain toggle
+                            let count = self.layers_filters[i].len();
+                            let label = if count == 0 {
+                                "fx".to_owned()
+                            } else {
+                                format!("fx {count}")
+                            };
+                            let expanded = self.editing_filters == Some(i);
+
+                            if ui
+                                .selectable_label(expanded, label)
+                                .on_hover_text("filters applied to this layer")
+                                .clicked()
+                            {
+                                self.editing_filters = if expanded { None } else { Some(i) };
+                            }
                             // Delete layer button
                             ui.add_enabled_ui(self.num_layers > 1, |ui| {
                                 if ui.button("x").on_hover_text("delete layer").clicked() {
@@ -174,6 +403,18 @@ impl LayersPanel {
                         ui.end_row();
                     }
                 });
+
+            if let Some(layer) = self.editing_filters {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.strong(&self.layers_names[layer]);
+
+                    if !self.filters_enabled {
+                        ui.weak("(filters are hidden)");
+                    }
+                });
+                self.filter_chain(ui, layer, &mut events);
+            }
 
             // Hand the name field whatever width the other columns don't need,
             // so a row fills the panel. Their widths don't depend on the name
