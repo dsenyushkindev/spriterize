@@ -73,6 +73,9 @@ async fn main() {
         next_frame().await;
 
         if state.must_exit() {
+            // Window size and position are tracked in memory as they change, so
+            // this is where they actually reach the disk.
+            state.save_settings();
             break;
         }
 

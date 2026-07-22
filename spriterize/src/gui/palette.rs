@@ -1,3 +1,4 @@
+use crate::gui::layout::{self, PanelLayout};
 use crate::wrapped_image::WrappedImage;
 use crate::Effect;
 use egui::ecolor::Hsva;
@@ -72,12 +73,10 @@ impl Palette {
         self.color.to_srgba_unmultiplied()
     }
 
-    pub fn update(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
+    pub fn update(&mut self, egui_ctx: &egui::Context, layout: &PanelLayout) -> Vec<Effect> {
         let mut fx = Vec::new();
 
-        egui::Window::new("Palette")
-            .default_pos((15., 30.))
-            .show(egui_ctx, |ui| {
+        layout.show(egui_ctx, layout::PALETTE, |ui| {
                 let changed = ui
                     .scope(|ui| {
                         ui.spacing_mut().slider_width = PICKER_WIDTH;

@@ -22,6 +22,8 @@ pub struct Settings {
     /// Window size in physical pixels, as last left by the user. `None` on a
     /// first run, when the size is derived from the display's scaling instead.
     pub window_size: Option<(u32, u32)>,
+    /// Window position in physical pixels, as last left by the user.
+    pub window_pos: Option<(u32, u32)>,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             show_grid: true,
             window_size: None,
+            window_pos: None,
         }
     }
 }
@@ -75,6 +78,13 @@ impl Settings {
                         }
                     }
                 }
+                "window_pos" => {
+                    if let Some((x, y)) = value.trim().split_once(',') {
+                        if let (Ok(x), Ok(y)) = (x.trim().parse(), y.trim().parse()) {
+                            settings.window_pos = Some((x, y));
+                        }
+                    }
+                }
                 _ => (),
             }
         }
@@ -95,6 +105,10 @@ impl Settings {
 
         if let Some((w, h)) = self.window_size {
             text.push_str(&format!("window_size={w}x{h}\n"));
+        }
+
+        if let Some((x, y)) = self.window_pos {
+            text.push_str(&format!("window_pos={x},{y}\n"));
         }
 
         let _ = std::fs::write(path, text);
@@ -144,6 +158,7 @@ mod tests {
             ui_scale: 1.5,
             show_grid: false,
             window_size: Some((1600, 1000)),
+            window_pos: Some((40, 40)),
         };
         let mut text = format!(
             "ui_scale={}\nshow_grid={}\n",
@@ -151,6 +166,8 @@ mod tests {
         );
         let (w, h) = settings.window_size.unwrap();
         text.push_str(&format!("window_size={w}x{h}\n"));
+        let (x, y) = settings.window_pos.unwrap();
+        text.push_str(&format!("window_pos={x},{y}\n"));
 
         assert_eq!(Settings::parse(&text), settings);
     }

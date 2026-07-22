@@ -5,6 +5,7 @@ use macroquad::prelude::*;
 use std::path::PathBuf;
 
 mod layers;
+mod layout;
 mod menu;
 mod palette;
 mod preview;
@@ -13,6 +14,7 @@ mod status;
 mod toolbar;
 
 use layers::LayersPanel;
+use layout::PanelLayout;
 use menu::MenuBar;
 use palette::Palette;
 use preview::Preview;
@@ -55,6 +57,7 @@ pub struct Gui {
     status_bar: StatusBar,
     menu: MenuBar,
     settings_window: SettingsWindow,
+    layout: PanelLayout,
     mouse_on_canvas: bool,
     selected_tool: Tool,
     /// Whether egui has an animation in flight (hover fades, tooltips, the text
@@ -73,6 +76,7 @@ impl Gui {
             status_bar: StatusBar::new(),
             menu: MenuBar::new(),
             settings_window: SettingsWindow::new(),
+            layout: PanelLayout::new(),
             mouse_on_canvas: false,
             selected_tool: Tool::Brush,
             wants_repaint: false,
@@ -86,6 +90,16 @@ impl Gui {
 
     pub fn open_settings(&mut self) {
         self.settings_window.open();
+    }
+
+    pub fn reset_layout(&mut self) {
+        self.layout.reset();
+    }
+
+    /// Whether the tool windows are still being positioned, and so another
+    /// frame is needed even if nothing else is happening.
+    pub fn is_arranging(&self) -> bool {
+        self.layout.is_arranging()
     }
 
     pub fn sync(&mut self, params: GuiSyncParams) {
@@ -129,19 +143,21 @@ impl Gui {
             egui_ctx.set_pixels_per_point(self.ui_scale);
             crate::theme::apply_egui_visuals(egui_ctx);
 
-            let mut palette_events = self.palette.update(egui_ctx);
+            let mut palette_events = self.palette.update(egui_ctx, &self.layout);
             events.append(&mut palette_events);
 
-            let mut toolbar_events = self.toolbar.update(egui_ctx, self.selected_tool);
+            let mut toolbar_events =
+                self.toolbar
+                    .update(egui_ctx, &self.layout, self.selected_tool);
             events.append(&mut toolbar_events);
 
-            let mut layers_events = self.layers_panel.update(egui_ctx);
+            let mut layers_events = self.layers_panel.update(egui_ctx, &self.layout);
             events.append(&mut layers_events);
 
             let mut menu_events = self.menu.update(egui_ctx);
             events.append(&mut menu_events);
 
-            self.preview.update(egui_ctx);
+            self.preview.update(egui_ctx, &self.layout);
             self.status_bar.update(egui_ctx);
 
             let mut settings_events = self.settings_window.update(egui_ctx);
@@ -155,6 +171,7 @@ impl Gui {
             }
 
             self.wants_repaint = egui_ctx.has_requested_repaint();
+            self.layout.update(egui_ctx);
         });
 
         events

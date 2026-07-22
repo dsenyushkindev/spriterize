@@ -18,7 +18,8 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 pub const WINDOW_W: i32 = 1200;
-pub const WINDOW_H: i32 = 780;
+pub const WINDOW_H: i32 = 820;
+const DEFAULT_WINDOW_POS: (u32, u32) = (40, 40);
 pub const CANVAS_W: u16 = 64;
 pub const CANVAS_H: u16 = 64;
 const LEFT_TOOLBAR_W: u16 = 300;
@@ -77,6 +78,7 @@ pub enum UiEvent {
     ToggleGrid,
     SetUiScale(f32),
     OpenSettings,
+    ResetLayout,
     MoveCamera(Direction),
     MoveCameraExact(Point<i32>),
     MouseOverGui,
@@ -252,6 +254,7 @@ impl UiState {
 
         self.mouse_over_gui = false;
         self.sync_screen_size();
+        self.sync_window_pos();
         self.handle_dropped_files()?;
 
         self.gui.sync((&*self).into());
@@ -288,6 +291,27 @@ impl UiState {
         };
 
         macroquad::window::request_new_screen_size(width as f32, height as f32);
+
+        // Without this the window keeps wherever the OS first put it, which
+        // combined with the resize above can leave most of it off screen.
+        let (x, y) = self.settings.window_pos.unwrap_or(DEFAULT_WINDOW_POS);
+        macroquad::miniquad::window::set_window_position(x, y);
+    }
+
+    /// Notes where the window has been moved to. Only kept in memory; the file
+    /// is written once on exit, so dragging the window doesn't write it on
+    /// every frame of the drag.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn sync_window_pos(&mut self) {
+        self.settings.window_pos = Some(macroquad::miniquad::window::get_window_position());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    fn sync_window_pos(&mut self) {}
+
+    /// Writes out settings that are tracked in memory while the app runs.
+    pub fn save_settings(&self) {
+        self.settings.save();
     }
 
     /// Re-centers the canvas whenever the drawing area changes size, which
@@ -305,10 +329,9 @@ impl UiState {
             self.center_canvas();
 
             // Remember the size the user settles on, but don't write back the
-            // one we just asked for ourselves.
+            // one we just asked for ourselves. Saved on exit, not here.
             if !first_frame {
                 self.settings.window_size = Some((screen.x as u32, screen.y as u32));
-                self.settings.save();
             }
         }
     }
@@ -376,7 +399,7 @@ impl UiState {
             || self.inner.free_image().is_some()
             || self.spritesheet_frames() > 1;
 
-        if animating || self.gui.wants_repaint() {
+        if animating || self.gui.wants_repaint() || self.gui.is_arranging() {
             macroquad::miniquad::window::schedule_update();
         }
     }
@@ -571,6 +594,7 @@ impl UiState {
                 self.center_canvas();
             }
             UiEvent::OpenSettings => self.gui.open_settings(),
+            UiEvent::ResetLayout => self.gui.reset_layout(),
             UiEvent::MoveCamera(dir) => self.move_camera(dir),
             UiEvent::MoveCameraExact(p) => self.move_camera_exact(p),
             UiEvent::MouseOverGui => self.mouse_over_gui = true,

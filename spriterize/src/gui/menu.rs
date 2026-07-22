@@ -174,6 +174,14 @@ impl MenuBar {
                         ui.close_menu();
                     }
                     ui.separator();
+                    if ui
+                        .button("Reset Window Layout")
+                        .on_hover_text("put the tool windows back where they started")
+                        .clicked()
+                    {
+                        events.push(Effect::UiEvent(UiEvent::ResetLayout));
+                        ui.close_menu();
+                    }
                     if ui.button("Settings…").clicked() {
                         events.push(Effect::UiEvent(UiEvent::OpenSettings));
                         ui.close_menu();

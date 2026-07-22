@@ -1,3 +1,4 @@
+use crate::gui::layout::{self, PanelLayout};
 use crate::{Effect, Resources};
 use lapix::{Event, Size, Tool};
 use macroquad::prelude::*;
@@ -31,23 +32,26 @@ impl Toolbar {
         self.tools.get_mut(&tool)
     }
 
-    pub fn update(&mut self, egui_ctx: &egui::Context, selected_tool: Tool) -> Vec<Effect> {
+    pub fn update(
+        &mut self,
+        egui_ctx: &egui::Context,
+        layout: &PanelLayout,
+        selected_tool: Tool,
+    ) -> Vec<Effect> {
         let mut events = Vec::new();
 
-        egui::Window::new("Toolbox")
-            .default_pos((15., 460.))
-            .show(egui_ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(160.);
-                    for tool in TOOLS {
-                        if let Some(btn) = self.get_mut(tool) {
-                            btn.add_to_ui(ui, selected_tool == tool, || {
-                                events.push(Event::SetTool(tool).into())
-                            });
-                        }
+        layout.show(egui_ctx, layout::TOOLBOX, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(160.);
+                for tool in TOOLS {
+                    if let Some(btn) = self.get_mut(tool) {
+                        btn.add_to_ui(ui, selected_tool == tool, || {
+                            events.push(Event::SetTool(tool).into())
+                        });
                     }
-                });
+                }
             });
+        });
 
         events
     }

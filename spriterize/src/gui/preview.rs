@@ -1,3 +1,4 @@
+use crate::gui::layout::{self, PanelLayout};
 use crate::UiState;
 use lapix::{Position, Rect, Size};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,53 +44,46 @@ impl Preview {
         self.canvas_size = canvas_size;
     }
 
-    pub fn update(&mut self, egui_ctx: &egui::Context) {
-        egui::Window::new("Preview")
-            .anchor(egui::Align2::RIGHT_BOTTOM, (-15., -15.))
-            .show(egui_ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let label = ui.label("scale:");
-                    ui.add(
-                        egui::widgets::TextEdit::singleline(&mut self.scale).desired_width(30.0),
-                    )
+    pub fn update(&mut self, egui_ctx: &egui::Context, layout: &PanelLayout) {
+        layout.show(egui_ctx, layout::PREVIEW, |ui| {
+            ui.horizontal(|ui| {
+                let label = ui.label("scale:");
+                ui.add(egui::widgets::TextEdit::singleline(&mut self.scale).desired_width(30.0))
                     .labelled_by(label.id);
-                });
-                let scroll_area = egui::ScrollArea::new([true, true]);
-                scroll_area.show_viewport(ui, |ui, viewport| {
-                    let frame_ratios = self.frame_ratios();
-
-                    let tex: &egui::TextureHandle = self.texture.get_or_insert_with(|| {
-                        ui.ctx()
-                            .load_texture("", self.image.clone(), egui::TextureOptions::NEAREST)
-                    });
-                    let frame_size = frame_ratios
-                        * egui::vec2(self.canvas_size.x as f32, self.canvas_size.y as f32);
-                    let scale = self.scale.parse().unwrap_or(1.);
-
-                    // The image is only a sized placeholder; the real frame is
-                    // painted over this rect with macroquad in `draw`.
-                    let image = egui::Image::new(egui::load::SizedTexture::new(
-                        tex.id(),
-                        frame_size * scale,
-                    ))
-                    .bg_fill(crate::theme::PREVIEW_BG);
-                    let r = ui.add(image).rect;
-
-                    let r: Rect<i32> =
-                        Rect::new(r.min.x, r.min.y, r.max.x - r.min.x, r.max.y - r.min.y).into();
-                    let cr = ui.clip_rect();
-                    let clip: Rect<i32> =
-                        Rect::new(cr.min.x, cr.min.y, cr.max.x - cr.min.x, cr.max.y - cr.min.y)
-                            .into();
-                    if clip.w >= 0 && clip.h >= 0 {
-                        let r = r.clip_to(clip);
-                        let offset = Position::new(viewport.min.x, viewport.min.y);
-                        self.config = Some((offset, r.into()));
-                    } else {
-                        self.config = None;
-                    }
-                });
             });
+            let scroll_area = egui::ScrollArea::new([true, true]);
+            scroll_area.show_viewport(ui, |ui, viewport| {
+                let frame_ratios = self.frame_ratios();
+
+                let tex: &egui::TextureHandle = self.texture.get_or_insert_with(|| {
+                    ui.ctx()
+                        .load_texture("", self.image.clone(), egui::TextureOptions::NEAREST)
+                });
+                let frame_size =
+                    frame_ratios * egui::vec2(self.canvas_size.x as f32, self.canvas_size.y as f32);
+                let scale = self.scale.parse().unwrap_or(1.);
+
+                // The image is only a sized placeholder; the real frame is
+                // painted over this rect with macroquad in `draw`.
+                let image =
+                    egui::Image::new(egui::load::SizedTexture::new(tex.id(), frame_size * scale))
+                        .bg_fill(crate::theme::PREVIEW_BG);
+                let r = ui.add(image).rect;
+
+                let r: Rect<i32> =
+                    Rect::new(r.min.x, r.min.y, r.max.x - r.min.x, r.max.y - r.min.y).into();
+                let cr = ui.clip_rect();
+                let clip: Rect<i32> =
+                    Rect::new(cr.min.x, cr.min.y, cr.max.x - cr.min.x, cr.max.y - cr.min.y).into();
+                if clip.w >= 0 && clip.h >= 0 {
+                    let r = r.clip_to(clip);
+                    let offset = Position::new(viewport.min.x, viewport.min.y);
+                    self.config = Some((offset, r.into()));
+                } else {
+                    self.config = None;
+                }
+            });
+        });
     }
 
     // TODO this method has a lot in common with graphics::draw_canvas,
