@@ -21,6 +21,9 @@ egui-macroquad = { version = "0.17.3", default-features = false }
 macroquad = "0.4.15"
 rfd = "0.10.0"
 egui = "0.31.1"
+# Pinned to 0.7.x: it targets egui ^0.31, matching our stack. 0.8+ needs egui
+# 0.32+, which egui-macroquad/miniquad don't support.
+egui-snarl = "0.7.1"
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.40"
 
