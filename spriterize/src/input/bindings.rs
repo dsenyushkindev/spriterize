@@ -161,6 +161,15 @@ impl KeyBindings {
                 InputEvent::KeyPress(mq::KeyCode::K.into()).into(),
                 Event::SetTool(Tool::Smooth).into(),
             ),
+            // FRAMES
+            (
+                InputEvent::KeyPress(mq::KeyCode::Period.into()).into(),
+                UiEvent::NextFrame.into(),
+            ),
+            (
+                InputEvent::KeyPress(mq::KeyCode::Comma.into()).into(),
+                UiEvent::PreviousFrame.into(),
+            ),
             // FLIP
             (
                 InputEvent::KeyPress(mq::KeyCode::H.into()).into(),

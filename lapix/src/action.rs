@@ -1,7 +1,9 @@
+use crate::layer::Cel;
 use crate::{Bitmap, CanvasEffect, Color, Filter, Layer, Layers, Point};
 use std::fmt::Debug;
 
 pub type LayerIndex = usize;
+pub type FrameIndex = usize;
 
 pub struct Action<IMG>(Vec<AtomicAction<IMG>>);
 
@@ -73,26 +75,36 @@ impl<IMG: Bitmap> Action<IMG> {
 }
 
 pub enum AtomicAction<IMG> {
-    SetPixel(LayerIndex, Point<i32>, Color),
+    // Pixel edits name the frame they happened on, so undoing one applies to
+    // that frame even if a different one is active by then.
+    SetPixel(LayerIndex, FrameIndex, Point<i32>, Color),
     DestroyLayer(LayerIndex),
     CreateLayer(LayerIndex, Layer<IMG>),
-    SetLayerCanvas(LayerIndex, IMG),
+    SetLayerCanvas(LayerIndex, FrameIndex, IMG),
     SetLayerFilters(LayerIndex, Vec<Filter>),
     SetLayerAdjustment(LayerIndex, bool),
+    // A frame's worth of cels, one per layer in layer order.
+    RemoveFrame(FrameIndex),
+    InsertFrame(FrameIndex, Vec<Cel<IMG>>),
 }
 
 impl<IMG> Debug for AtomicAction<IMG> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
-            Self::SetPixel(i, p, c) => f
+            Self::SetPixel(i, frame, p, c) => f
                 .debug_tuple("SetPixel")
                 .field(&i)
+                .field(&frame)
                 .field(&p)
                 .field(&c)
                 .finish(),
             Self::DestroyLayer(i) => f.debug_tuple("DestroyLayer").field(&i).finish(),
             Self::CreateLayer(i, _) => f.debug_tuple("CreateLayer").field(&i).finish(),
-            Self::SetLayerCanvas(i, _) => f.debug_tuple("SetLayerCanvas").field(&i).finish(),
+            Self::SetLayerCanvas(i, frame, _) => f
+                .debug_tuple("SetLayerCanvas")
+                .field(&i)
+                .field(&frame)
+                .finish(),
             Self::SetLayerFilters(i, filters) => f
                 .debug_tuple("SetLayerFilters")
                 .field(&i)
@@ -103,15 +115,21 @@ impl<IMG> Debug for AtomicAction<IMG> {
                 .field(&i)
                 .field(&adjustment)
                 .finish(),
+            Self::RemoveFrame(frame) => f.debug_tuple("RemoveFrame").field(&frame).finish(),
+            Self::InsertFrame(frame, _) => f.debug_tuple("InsertFrame").field(&frame).finish(),
         }
     }
 }
 
 impl<IMG: Bitmap> AtomicAction<IMG> {
-    pub fn set_pixel_vec(i: LayerIndex, values: Vec<(Point<i32>, Color)>) -> Vec<Self> {
+    pub fn set_pixel_vec(
+        i: LayerIndex,
+        frame: FrameIndex,
+        values: Vec<(Point<i32>, Color)>,
+    ) -> Vec<Self> {
         values
             .into_iter()
-            .map(|(p, c)| AtomicAction::SetPixel(i, p, c))
+            .map(|(p, c)| AtomicAction::SetPixel(i, frame, p, c))
             .collect()
     }
 
@@ -122,19 +140,18 @@ impl<IMG: Bitmap> AtomicAction<IMG> {
     /// nothing to reverse in that case.
     pub fn apply(self, layers: &mut Layers<IMG>) -> (CanvasEffect, Option<AtomicAction<IMG>>) {
         let inverse = match self {
-            Self::SetPixel(i, p, color) => layers
-                .canvas_at_mut(i)
+            Self::SetPixel(i, frame, p, color) => layers
+                .cel_mut(i, frame)
                 .set_pixel(p, color)
-                .map(|(p, old_color)| Self::SetPixel(i, p, old_color)),
+                .map(|(p, old_color)| Self::SetPixel(i, frame, p, old_color)),
             Self::DestroyLayer(i) => Some(Self::CreateLayer(i, layers.delete(i))),
             Self::CreateLayer(i, layer) => {
                 layers.add_at(i, layer);
                 Some(Self::DestroyLayer(i))
             }
-            Self::SetLayerCanvas(i, img) => {
-                let old_img = layers.canvas_at_mut(i).take_inner();
-                layers.canvas_at_mut(i).set_img(img);
-                Some(Self::SetLayerCanvas(i, old_img))
+            Self::SetLayerCanvas(i, frame, img) => {
+                let old_img = layers.set_cel_img(i, frame, img);
+                Some(Self::SetLayerCanvas(i, frame, old_img))
             }
             Self::SetLayerFilters(i, filters) => {
                 Some(Self::SetLayerFilters(i, layers.set_filters(i, filters)))
@@ -143,6 +160,13 @@ impl<IMG: Bitmap> AtomicAction<IMG> {
                 i,
                 layers.set_adjustment(i, adjustment),
             )),
+            Self::RemoveFrame(frame) => layers
+                .remove_frame(frame)
+                .map(|cels| Self::InsertFrame(frame, cels)),
+            Self::InsertFrame(frame, cels) => {
+                layers.insert_frame(frame, cels);
+                Some(Self::RemoveFrame(frame))
+            }
         };
 
         (CanvasEffect::Layer, inverse)

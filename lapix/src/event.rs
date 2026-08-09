@@ -123,6 +123,15 @@ pub enum Event {
     /// Move the layer at specified index up (swap positions with the layer
     /// above it)
     MoveLayerUp(usize),
+    /// Add a blank frame after the last one and switch to it
+    AddFrame,
+    /// Insert a copy of the frame at the given index right after it, and switch
+    /// to the copy
+    DuplicateFrame(usize),
+    /// Delete the frame at the given index. Does nothing if it is the only one.
+    DeleteFrame(usize),
+    /// Switch the frame being edited and shown
+    SwitchFrame(usize),
     /// Define how many horizontal and vertical frames this spritesheet has
     /// (default is (1, 1), that is, just one frame). This is useful for
     /// displaying animations
@@ -194,6 +203,10 @@ impl Event {
             | Self::SetLayerFilters(_, _)
             | Self::SetFiltersEnabled(_)
             | Self::SetLayerAdjustment(_, _)
+            | Self::AddFrame
+            | Self::DuplicateFrame(_)
+            | Self::DeleteFrame(_)
+            | Self::SwitchFrame(_)
             | Self::LoadProject(_) => CanvasEffect::Layer,
             x if x.triggers_anchoring() => CanvasEffect::Update,
             _ => CanvasEffect::None,
@@ -213,6 +226,9 @@ impl Event {
                 | Self::FlipVertical
                 | Self::MoveLayerDown(_)
                 | Self::MoveLayerUp(_)
+                | Self::AddFrame
+                | Self::DuplicateFrame(_)
+                | Self::DeleteFrame(_)
         )
     }
 
@@ -273,6 +289,9 @@ impl Event {
                 | Self::ApplyTransform(_)
                 | Self::SetLayerFilters(_, _)
                 | Self::SetLayerAdjustment(_, _)
+                | Self::AddFrame
+                | Self::DuplicateFrame(_)
+                | Self::DeleteFrame(_)
         )
     }
 

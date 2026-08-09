@@ -80,6 +80,8 @@ pub enum UiEvent {
     ZoomMul(f32),
     ToggleGrid,
     ToggleFilters,
+    NextFrame,
+    PreviousFrame,
     SetUiScale(f32),
     OpenSettings,
     ResetLayout,
@@ -159,6 +161,8 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
                 .map(|i| state.inner.layers().get(i).is_adjustment())
                 .collect(),
             filters_enabled: state.inner.filters_enabled(),
+            frame_count: state.inner.frame_count(),
+            active_frame: state.inner.active_frame(),
             palette: state.inner.palette().iter().map(|c| (*c).into()).collect(),
             mouse_canvas: (x, y).into(),
             is_on_canvas: in_canvas,
@@ -710,6 +714,19 @@ impl UiState {
                 let enabled = self.inner.filters_enabled();
 
                 self.execute(Event::SetFiltersEnabled(!enabled))?;
+            }
+            // Wrap around, so holding the key cycles the animation.
+            UiEvent::NextFrame => {
+                let count = self.inner.frame_count();
+                let next = (self.inner.active_frame() + 1) % count;
+
+                self.execute(Event::SwitchFrame(next))?;
+            }
+            UiEvent::PreviousFrame => {
+                let count = self.inner.frame_count();
+                let previous = (self.inner.active_frame() + count - 1) % count;
+
+                self.execute(Event::SwitchFrame(previous))?;
             }
             UiEvent::OpenSettings => self.gui.open_settings(),
             UiEvent::ResetLayout => self.gui.reset_layout(),

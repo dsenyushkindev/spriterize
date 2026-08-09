@@ -1139,6 +1139,144 @@ fn a_shared_crop_keeps_images_the_same_size() {
 
 #[cfg(feature = "test-utils")]
 #[test]
+fn a_project_starts_with_one_frame() {
+    let mut state = State::<TestImage>::new(Size::new(8, 8), None, None);
+
+    assert_eq!(state.frame_count(), 1);
+    assert_eq!(state.active_frame(), 0);
+
+    state.execute(Event::AddFrame).unwrap();
+
+    assert_eq!(state.frame_count(), 2);
+    // Adding a frame switches to it.
+    assert_eq!(state.active_frame(), 1);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn each_frame_holds_its_own_pixels_but_shares_the_layers() {
+    let red = Color::new(255, 0, 0, 255);
+    let blue = Color::new(0, 0, 255, 255);
+    let dot = Point::new(4, 4);
+    let mut state = State::<TestImage>::new(Size::new(8, 8), None, None);
+
+    // Draw red on frame 0.
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(dot)).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // Draw blue on a new frame 1.
+    state.execute(Event::AddFrame).unwrap();
+    state.execute(Event::SetMainColor(blue)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(dot)).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // A layer added while on frame 1 exists on frame 0 too.
+    state.execute(Event::NewLayerAbove).unwrap();
+    assert_eq!(state.layers().get(0).frame_count(), 2);
+    assert_eq!(state.layers().get(1).frame_count(), 2);
+
+    state.execute(Event::SwitchFrame(0)).unwrap();
+    assert_eq!(state.visible_pixel(dot), red);
+
+    state.execute(Event::SwitchFrame(1)).unwrap();
+    assert_eq!(state.visible_pixel(dot), blue);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn undo_applies_to_the_frame_the_edit_was_made_on() {
+    // The reason atomic actions carry a frame: drawing on one frame, switching
+    // away, then undoing must revert the frame that was drawn on, not the one
+    // that happens to be active.
+    let red = Color::new(255, 0, 0, 255);
+    let dot = Point::new(3, 3);
+    let mut state = State::<TestImage>::new(Size::new(8, 8), None, None);
+
+    state.execute(Event::AddFrame).unwrap();
+    assert_eq!(state.active_frame(), 1);
+
+    // Paint frame 1.
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(dot)).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // Move to frame 0, then undo the stroke.
+    state.execute(Event::SwitchFrame(0)).unwrap();
+    state.execute(Event::Undo).unwrap();
+
+    // Frame 1's stroke is gone; frame 0 was never touched.
+    state.execute(Event::SwitchFrame(1)).unwrap();
+    assert_eq!(state.visible_pixel(dot), TRANSPARENT);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_duplicated_frame_copies_the_pixels_then_diverges() {
+    use lapix::Bitmap;
+
+    let red = Color::new(255, 0, 0, 255);
+    let dot = Point::new(2, 2);
+    let mut state = State::<TestImage>::new(Size::new(8, 8), None, None);
+
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(dot)).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    state.execute(Event::DuplicateFrame(0)).unwrap();
+    assert_eq!(state.frame_count(), 2);
+    assert_eq!(state.active_frame(), 1);
+    // The copy starts identical.
+    assert_eq!(state.visible_pixel(dot), red);
+
+    // Erasing on the copy leaves the original alone.
+    state.execute(Event::ClearCanvas).unwrap();
+    assert_eq!(state.visible_pixel(dot), TRANSPARENT);
+    state.execute(Event::SwitchFrame(0)).unwrap();
+    assert_eq!(state.canvas().pixel(dot), red);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn deleting_a_frame_can_be_undone() {
+    let red = Color::new(255, 0, 0, 255);
+    let dot = Point::new(5, 5);
+    let mut state = State::<TestImage>::new(Size::new(8, 8), None, None);
+
+    // Frame 1 gets a red dot.
+    state.execute(Event::AddFrame).unwrap();
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(dot)).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    state.execute(Event::DeleteFrame(1)).unwrap();
+    assert_eq!(state.frame_count(), 1);
+
+    state.execute(Event::Undo).unwrap();
+    assert_eq!(state.frame_count(), 2);
+    // Its pixels come back with it.
+    state.execute(Event::SwitchFrame(1)).unwrap();
+    assert_eq!(state.visible_pixel(dot), red);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn the_last_frame_cannot_be_deleted() {
+    let mut state = State::<TestImage>::new(Size::new(8, 8), None, None);
+
+    state.execute(Event::DeleteFrame(0)).unwrap();
+
+    assert_eq!(state.frame_count(), 1);
+    assert!(!state.can_undo(), "a refused delete records nothing to undo");
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
 fn layers_start_with_distinct_default_names() {
     let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
 

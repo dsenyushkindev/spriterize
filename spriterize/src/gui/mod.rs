@@ -5,6 +5,7 @@ use macroquad::prelude::*;
 use std::path::PathBuf;
 
 mod export;
+mod frames;
 mod layers;
 mod layout;
 mod menu;
@@ -14,6 +15,7 @@ mod settings;
 mod status;
 mod toolbar;
 
+use frames::FramesPanel;
 use layers::LayersPanel;
 use layout::PanelLayout;
 use menu::MenuBar;
@@ -33,6 +35,8 @@ pub struct GuiSyncParams {
     pub layers_names: Vec<String>,
     pub layers_filters: Vec<Vec<Filter>>,
     pub layers_adjustment: Vec<bool>,
+    pub frame_count: usize,
+    pub active_frame: usize,
     pub filters_enabled: bool,
     pub palette: Vec<[u8; 4]>,
     pub mouse_canvas: Position<i32>,
@@ -60,6 +64,7 @@ pub struct GuiSyncParams {
 pub struct Gui {
     toolbar: Toolbar,
     layers_panel: LayersPanel,
+    frames_panel: FramesPanel,
     preview: Preview,
     palette: Palette,
     status_bar: StatusBar,
@@ -80,6 +85,7 @@ impl Gui {
         Self {
             toolbar: Toolbar::new(),
             layers_panel: LayersPanel::new(),
+            frames_panel: FramesPanel::new(),
             preview: Preview::new(),
             palette: Palette::new(),
             status_bar: StatusBar::new(),
@@ -127,6 +133,8 @@ impl Gui {
             params.layers_adjustment.clone(),
             params.filters_enabled,
         );
+        self.frames_panel
+            .sync(params.frame_count, params.active_frame);
         self.preview.sync(
             params.spritesheet,
             params.canvas_size,
@@ -175,6 +183,9 @@ impl Gui {
 
             let mut layers_events = self.layers_panel.update(egui_ctx, &self.layout);
             events.append(&mut layers_events);
+
+            let mut frames_events = self.frames_panel.update(egui_ctx, &self.layout);
+            events.append(&mut frames_events);
 
             let mut menu_events = self.menu.update(egui_ctx);
             events.append(&mut menu_events);

@@ -164,13 +164,15 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     }
 
     fn add_to_pixels_action(&mut self, actions: Vec<(Point<i32>, Color)>) -> Result<()> {
-        let actions = AtomicAction::set_pixel_vec(self.layers.active_index(), actions);
+        let (layer, frame) = (self.layers.active_index(), self.layers.active_frame());
+        let actions = AtomicAction::set_pixel_vec(layer, frame, actions);
 
         self.add_to_action(actions)
     }
 
     fn single_pixels_action(&mut self, actions: Vec<(Point<i32>, Color)>) {
-        let actions = AtomicAction::set_pixel_vec(self.layers.active_index(), actions);
+        let (layer, frame) = (self.layers.active_index(), self.layers.active_frame());
+        let actions = AtomicAction::set_pixel_vec(layer, frame, actions);
         self.single_action(actions.into());
     }
 
@@ -198,23 +200,48 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
 
         match event.clone() {
             Event::ClearCanvas => {
+                let (layer, frame) = (self.layers.active_index(), self.layers.active_frame());
                 let img = self.canvas_mut().clear();
-                let reversal = AtomicAction::SetLayerCanvas(self.layers.active_index(), img);
+                let reversal = AtomicAction::SetLayerCanvas(layer, frame, img);
                 self.start_action();
                 self.add_to_action(vec![reversal])?;
                 self.end_action();
             }
             Event::ResizeCanvas(size) => {
                 self.start_action();
+                // Resizing changes every frame of every layer, so each cel's
+                // old image is a separate reversal.
                 let imgs = self.resize_canvas(size);
                 self.add_to_action(
                     imgs.into_iter()
-                        .enumerate()
-                        .map(|(i, img)| AtomicAction::SetLayerCanvas(i, img))
+                        .map(|(layer, frame, img)| AtomicAction::SetLayerCanvas(layer, frame, img))
                         .collect(),
                 )?;
                 self.end_action();
             }
+            Event::AddFrame => {
+                let frame = self.layers.add_frame();
+                self.start_action();
+                // The new frame is blank, so its reversal just removes it.
+                self.add_to_action(vec![AtomicAction::RemoveFrame(frame)])?;
+                self.end_action();
+            }
+            Event::DuplicateFrame(frame) => {
+                let added = self.layers.duplicate_frame(frame);
+                self.start_action();
+                self.add_to_action(vec![AtomicAction::RemoveFrame(added)])?;
+                self.end_action();
+            }
+            Event::DeleteFrame(frame) => {
+                if let Some(cels) = self.layers.remove_frame(frame) {
+                    self.start_action();
+                    self.add_to_action(vec![AtomicAction::InsertFrame(frame, cels)])?;
+                    self.end_action();
+                } else {
+                    skip_event = true;
+                }
+            }
+            Event::SwitchFrame(frame) => self.layers.switch_frame(frame),
             Event::LineStart(_) | Event::RectStart(_) | Event::EllipseStart(_) => (),
             Event::BrushStart | Event::EraseStart | Event::SmoothStart => self.start_action(),
             Event::BrushEnd | Event::EraseEnd | Event::SmoothEnd => self.end_action(),
@@ -542,7 +569,9 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         }
     }
 
-    fn resize_canvas(&mut self, size: Size<i32>) -> Vec<IMG> {
+    /// Resize every frame of every layer, returning the old images tagged with
+    /// their layer and frame.
+    fn resize_canvas(&mut self, size: Size<i32>) -> Vec<(usize, usize, IMG)> {
         self.layers.resize_all(size)
     }
 
@@ -580,6 +609,16 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     /// frames). For a static image (not an animation) it will be `(1, 1)`.
     pub fn spritesheet(&self) -> Size<u8> {
         self.spritesheet
+    }
+
+    /// How many frames the project has
+    pub fn frame_count(&self) -> usize {
+        self.layers.frame_count()
+    }
+
+    /// The frame being edited and shown
+    pub fn active_frame(&self) -> usize {
+        self.layers.active_frame()
     }
 
     /// Set the spritesheet dimensions (number of horizontal and vertical

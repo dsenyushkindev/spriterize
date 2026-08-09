@@ -12,10 +12,11 @@ use std::collections::HashMap;
 pub const PALETTE: &str = "Palette";
 pub const TOOLBOX: &str = "Toolbox";
 pub const LAYERS: &str = "Layers";
+pub const FRAMES: &str = "Frames";
 pub const PREVIEW: &str = "Preview";
 
 /// The windows stacked down the left edge, in order.
-const COLUMN: [&str; 3] = [PALETTE, TOOLBOX, LAYERS];
+const COLUMN: [&str; 4] = [PALETTE, TOOLBOX, LAYERS, FRAMES];
 
 /// Width the stacked tool windows are laid out to, so they line up as a column
 /// of equal-width panels. Individual widgets can still be narrower than this.
@@ -42,6 +43,7 @@ fn fallback_size(title: &str) -> (f32, f32) {
         PALETTE => (290., 430.),
         TOOLBOX => (200., 95.),
         LAYERS => (240., 115.),
+        FRAMES => (240., 80.),
         _ => (200., 200.),
     }
 }

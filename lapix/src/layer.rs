@@ -34,6 +34,9 @@ fn default_layer_name(n: usize) -> String {
 pub struct Layers<IMG> {
     inner: Vec<Layer<IMG>>,
     active: usize,
+    /// The frame being edited and shown. Every layer holds a cel for it.
+    #[serde(default)]
+    active_frame: usize,
     /// Whether filters are applied at all. Turning them off shows the pixels as
     /// they are stored, which is a view setting rather than part of the
     /// drawing, so it isn't saved with the project.
@@ -57,11 +60,97 @@ impl<IMG: Bitmap> Layers<IMG> {
     /// Creates a new set of layers
     pub fn new(size: Size<i32>) -> Self {
         Self {
-            inner: vec![Layer::new(size, default_layer_name(1))],
+            inner: vec![Layer::new(size, default_layer_name(1), 1)],
             active: 0,
+            active_frame: 0,
             filters_enabled: enabled(),
             composite: empty_cache(),
         }
+    }
+
+    /// How many frames the project has. Every layer has this many cels.
+    pub fn frame_count(&self) -> usize {
+        self.inner[0].frame_count()
+    }
+
+    /// The frame being edited and shown
+    pub fn active_frame(&self) -> usize {
+        self.active_frame
+    }
+
+    /// The size a cel has, taken from the first layer's first frame
+    fn cel_size(&self) -> Size<i32> {
+        self.inner[0].canvas(0).size()
+    }
+
+    /// Switch to a different frame
+    pub fn switch_frame(&mut self, frame: usize) {
+        if frame < self.frame_count() {
+            self.invalidate_composite();
+            self.active_frame = frame;
+        }
+    }
+
+    /// Add a blank frame after the last one, and switch to it. Returns its
+    /// index.
+    pub fn add_frame(&mut self) -> usize {
+        self.invalidate_composite();
+        let size = self.cel_size();
+
+        for layer in &mut self.inner {
+            layer.add_cel(size);
+        }
+
+        self.active_frame = self.frame_count() - 1;
+
+        self.active_frame
+    }
+
+    /// Insert a frame's cels back at an index, for undoing a deletion. Each
+    /// layer takes its cel from the list, in layer order.
+    pub fn insert_frame(&mut self, frame: usize, cels: Vec<Cel<IMG>>) {
+        self.invalidate_composite();
+
+        for (layer, cel) in self.inner.iter_mut().zip(cels) {
+            layer.insert_cel(frame, cel);
+        }
+
+        self.active_frame = frame.min(self.frame_count() - 1);
+    }
+
+    /// Insert a copy of a frame right after it, and switch to the copy. Returns
+    /// the new frame's index.
+    pub fn duplicate_frame(&mut self, frame: usize) -> usize {
+        self.invalidate_composite();
+
+        for layer in &mut self.inner {
+            let copy = layer.duplicate_cel(frame);
+            layer.insert_cel(frame + 1, copy);
+        }
+
+        self.active_frame = frame + 1;
+
+        self.active_frame
+    }
+
+    /// Remove a frame, returning each layer's cel for it in layer order, so the
+    /// deletion can be undone. Does nothing and returns `None` if it is the
+    /// only frame.
+    pub fn remove_frame(&mut self, frame: usize) -> Option<Vec<Cel<IMG>>> {
+        if self.frame_count() <= 1 {
+            return None;
+        }
+
+        self.invalidate_composite();
+        let cels = self
+            .inner
+            .iter_mut()
+            .map(|layer| layer.remove_cel(frame))
+            .collect();
+
+        self.active_frame = self.active_frame.min(self.frame_count() - 1);
+
+        Some(cels)
     }
 
     /// Throw away the flattened image, so it is built again on the next read.
@@ -160,7 +249,7 @@ impl<IMG: Bitmap> Layers<IMG> {
             return Rendered::Source(self.canvas_at(index).inner());
         }
 
-        self.inner[index].rendered(palette)
+        self.inner[index].rendered(self.active_frame, palette)
     }
 
     /// Replace a layer's filter chain, returning the one it had
@@ -184,7 +273,7 @@ impl<IMG: Bitmap> Layers<IMG> {
     pub fn invalidate_filters(&mut self) {
         self.invalidate_composite();
         for layer in &mut self.inner {
-            layer.invalidate();
+            layer.invalidate_all();
         }
     }
 
@@ -203,12 +292,13 @@ impl<IMG: Bitmap> Layers<IMG> {
         self.inner.len()
     }
 
-    /// Get the [`Canvas`] of the [`Layer`] at the specified index
+    /// Get the active frame's [`Canvas`] for the [`Layer`] at the specified
+    /// index
     pub fn canvas_at(&self, index: usize) -> &Canvas<IMG> {
-        self.inner[index].canvas()
+        self.inner[index].canvas(self.active_frame)
     }
 
-    /// Get the [`Canvas`] of the active [`Layer`]
+    /// Get the active frame's [`Canvas`] for the active [`Layer`]
     pub fn active_canvas(&self) -> &Canvas<IMG> {
         self.canvas_at(self.active)
     }
@@ -246,27 +336,49 @@ impl<IMG: Bitmap> Layers<IMG> {
         &mut self.inner[index]
     }
 
-    /// Get a mutable reference to the [`Canvas`] of the [`Layer`] at a certain
-    /// index
+    /// Get a mutable reference to the active frame's [`Canvas`] for the
+    /// [`Layer`] at a certain index
     pub fn canvas_at_mut(&mut self, index: usize) -> &mut Canvas<IMG> {
         self.invalidate_composite();
-        self.inner[index].canvas_mut()
+        let frame = self.active_frame;
+        self.inner[index].canvas_mut(frame)
     }
 
-    /// Get a mutable reference to the [`Canvas`] of the active [`Layer`]
+    /// Get a mutable reference to a specific frame's [`Canvas`] for a layer,
+    /// for replaying an edit onto the frame it was made on rather than whichever
+    /// is active now
+    pub fn cel_mut(&mut self, index: usize, frame: usize) -> &mut Canvas<IMG> {
+        self.invalidate_composite();
+        self.inner[index].canvas_mut(frame)
+    }
+
+    /// Replace a frame's image for a layer, returning the one it had
+    pub fn set_cel_img(&mut self, index: usize, frame: usize, img: IMG) -> IMG {
+        self.invalidate_composite();
+        let old = self.inner[index].take_img(frame);
+        self.inner[index].canvas_mut(frame).set_img(img);
+
+        old
+    }
+
+    /// Get a mutable reference to the active frame's [`Canvas`] for the active
+    /// [`Layer`]
     pub fn active_canvas_mut(&mut self) -> &mut Canvas<IMG> {
         self.invalidate_composite();
-        self.inner[self.active].canvas_mut()
+        let (active, frame) = (self.active, self.active_frame);
+        self.inner[active].canvas_mut(frame)
     }
 
-    /// Resize all [`Layer`]s, returning the images that were there before the
-    /// resizing (used for undoing)
-    pub fn resize_all(&mut self, size: Size<i32>) -> Vec<IMG> {
+    /// Resize every frame of every [`Layer`], returning the images that were
+    /// there before, tagged with their layer and frame (used for undoing)
+    pub fn resize_all(&mut self, size: Size<i32>) -> Vec<(usize, usize, IMG)> {
         self.invalidate_composite();
         let mut imgs = Vec::new();
-        for layer in self.inner.iter_mut() {
-            let img = layer.resize(size);
-            imgs.push(img);
+
+        for (layer_index, layer) in self.inner.iter_mut().enumerate() {
+            for (frame, img) in layer.resize(size).into_iter().enumerate() {
+                imgs.push((layer_index, frame, img));
+            }
         }
 
         imgs
@@ -278,10 +390,10 @@ impl<IMG: Bitmap> Layers<IMG> {
         self.active = index;
     }
 
-    /// Add a new [`Layer`] above all layers
+    /// Add a new [`Layer`] above all layers, with a cel for every frame
     pub fn add_new_above(&mut self) {
         self.invalidate_composite();
-        let layer = Layer::new(self.active_canvas().size(), self.unused_default_name());
+        let layer = Layer::new(self.cel_size(), self.unused_default_name(), self.frame_count());
         self.inner.push(layer);
     }
 
@@ -343,47 +455,89 @@ impl<IMG: Bitmap> Layers<IMG> {
     }
 }
 
-/// Represents a layer of the canvas. Layers are stacked on top of each other to
-/// make a final image, blending colors with transparency. Layers can be moved
-/// up or down relative to each other, can be made invisible or have a level of
-/// transparency (opacity).
+/// One layer's pixels for one frame, together with the cached result of running
+/// the layer's filters over them.
+///
+/// A layer holds one of these per frame. The filtered result is cached per cel
+/// because each frame's pixels differ; it is not saved, since it can always be
+/// worked out again from the pixels and the chain.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Layer<IMG> {
+pub struct Cel<IMG> {
     canvas: Canvas<IMG>,
-    visible: bool,
-    opacity: u8,
-    /// What the user calls this layer. Also the file name it gets when layers
-    /// are exported separately.
-    name: String,
-    /// Applied in order to produce what is shown, leaving `canvas` untouched.
-    filters: Vec<Filter>,
-    /// When set, this layer draws nothing of its own: its filters apply to
-    /// everything stacked below it instead.
-    adjustment: bool,
-    /// The result of the filters, kept until something invalidates it. Not
-    /// saved: it can always be worked out again from the pixels and the chain.
     #[serde(skip, default = "empty_cache")]
     cache: RefCell<Option<IMG>>,
 }
 
-/// Spelled out rather than derived, so layers don't need their image type to
+impl<IMG: Bitmap> Cel<IMG> {
+    fn new(size: Size<i32>) -> Self {
+        Self::from_canvas(Canvas::new(size))
+    }
+
+    fn from_canvas(canvas: Canvas<IMG>) -> Self {
+        Self {
+            canvas,
+            cache: RefCell::new(None),
+        }
+    }
+
+    /// A separate cel with the same pixels, for duplicating a frame.
+    fn duplicate(&self) -> Self {
+        let mut canvas = Canvas::new(self.canvas.size());
+        canvas.set_img(self.canvas.inner().clone());
+
+        Self::from_canvas(canvas)
+    }
+
+    fn invalidate(&mut self) {
+        *self.cache.get_mut() = None;
+    }
+}
+
+/// Spelled out rather than derived, so cels don't need their image type to
 /// implement `Default` just to have somewhere to keep the filtered result.
 fn empty_cache<IMG>() -> RefCell<Option<IMG>> {
     RefCell::new(None)
 }
 
+/// A layer of the canvas: a stack of these, blended by transparency, makes the
+/// picture. Layers can be reordered, hidden, given an opacity and a filter
+/// chain, or turned into adjustment layers.
+///
+/// A layer's pixels are stored per frame as [`Cel`]s: the name, order,
+/// visibility, opacity and filters are shared across every frame, while each
+/// frame has its own pixels. Every layer in a project holds the same number of
+/// cels.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Layer<IMG> {
+    cels: Vec<Cel<IMG>>,
+    visible: bool,
+    opacity: u8,
+    /// What the user calls this layer. Also the file name it gets when layers
+    /// are exported separately.
+    name: String,
+    /// Applied in order to produce what is shown, leaving the pixels untouched.
+    filters: Vec<Filter>,
+    /// When set, this layer draws nothing of its own: its filters apply to
+    /// everything stacked below it instead.
+    adjustment: bool,
+}
+
 impl<IMG: Bitmap> Layer<IMG> {
-    /// Create a new layer with a specified size and name
-    pub fn new(size: Size<i32>, name: impl Into<String>) -> Self {
+    /// Create a new layer with a specified size, name and number of frames
+    pub fn new(size: Size<i32>, name: impl Into<String>, frames: usize) -> Self {
         Self {
-            canvas: Canvas::new(size),
+            cels: (0..frames.max(1)).map(|_| Cel::new(size)).collect(),
             visible: true,
             opacity: 255,
             name: name.into(),
             filters: Vec::new(),
             adjustment: false,
-            cache: RefCell::new(None),
         }
+    }
+
+    /// How many frames this layer holds a cel for
+    pub fn frame_count(&self) -> usize {
+        self.cels.len()
     }
 
     /// Whether this layer filters what is below it rather than drawing its own
@@ -405,38 +559,45 @@ impl<IMG: Bitmap> Layer<IMG> {
 
     /// Replace this layer's filter chain, returning the one it had
     pub fn set_filters(&mut self, filters: Vec<Filter>) -> Vec<Filter> {
-        self.invalidate();
+        // The chain is shared by every frame, so every cel's cached result is
+        // now stale.
+        self.invalidate_all();
 
         std::mem::replace(&mut self.filters, filters)
     }
 
-    /// This layer's image as it should be seen, with its filters applied.
+    /// This layer's image for one frame as it should be seen, with its filters
+    /// applied.
     ///
     /// The result is kept until the pixels or the chain change, so this is
     /// cheap to call repeatedly — for every pixel of a composite, say.
-    pub fn rendered(&self, palette: &[Color]) -> Rendered<'_, IMG> {
+    pub fn rendered(&self, frame: usize, palette: &[Color]) -> Rendered<'_, IMG> {
+        let cel = &self.cels[frame];
+
         if self.filters.is_empty() {
-            return Rendered::Source(self.canvas.inner());
+            return Rendered::Source(cel.canvas.inner());
         }
 
-        if self.cache.borrow().is_none() {
-            let mut img = self.canvas.inner().clone();
+        if cel.cache.borrow().is_none() {
+            let mut img = cel.canvas.inner().clone();
 
             for filter in &self.filters {
                 filter.apply(&mut img, palette);
             }
 
-            *self.cache.borrow_mut() = Some(img);
+            *cel.cache.borrow_mut() = Some(img);
         }
 
-        Rendered::Filtered(Ref::map(self.cache.borrow(), |cached| {
+        Rendered::Filtered(Ref::map(cel.cache.borrow(), |cached| {
             cached.as_ref().expect("just computed")
         }))
     }
 
-    /// Throw away the filtered image, so the next read works it out again.
-    pub fn invalidate(&mut self) {
-        *self.cache.get_mut() = None;
+    /// Throw away every cel's filtered image, so they are worked out again.
+    pub fn invalidate_all(&mut self) {
+        for cel in &mut self.cels {
+            cel.invalidate();
+        }
     }
 
     /// The name of this layer
@@ -449,20 +610,20 @@ impl<IMG: Bitmap> Layer<IMG> {
         self.name = name.into();
     }
 
-    /// Get the [`Canvas`] of this layer
-    pub fn canvas(&self) -> &Canvas<IMG> {
-        &self.canvas
+    /// Get the [`Canvas`] holding this layer's pixels for a frame
+    pub fn canvas(&self, frame: usize) -> &Canvas<IMG> {
+        &self.cels[frame].canvas
     }
 
-    /// Get a mutable reference to the [`Canvas`] of this layer
+    /// Get a mutable reference to a frame's [`Canvas`]
     ///
-    /// Handing out the canvas for writing means the filtered image can no
+    /// Handing out the canvas for writing means its filtered image can no
     /// longer be trusted, so it is dropped here rather than trying to catch
     /// every individual edit.
-    pub fn canvas_mut(&mut self) -> &mut Canvas<IMG> {
-        self.invalidate();
+    pub fn canvas_mut(&mut self, frame: usize) -> &mut Canvas<IMG> {
+        self.cels[frame].invalidate();
 
-        &mut self.canvas
+        &mut self.cels[frame].canvas
     }
 
     /// Whether this layer is visible
@@ -475,16 +636,23 @@ impl<IMG: Bitmap> Layer<IMG> {
         self.opacity
     }
 
-    /// Take the image of this layer's [`Canvas`], leaving a dummy empty one in
-    /// its place
-    pub fn take_img(&mut self) -> IMG {
-        self.canvas.take_inner()
+    /// Take the image of a frame's [`Canvas`], leaving a dummy empty one in its
+    /// place
+    pub fn take_img(&mut self, frame: usize) -> IMG {
+        self.cels[frame].invalidate();
+        self.cels[frame].canvas.take_inner()
     }
 
-    /// Resize this layer, returning the previous image (the image before the
-    /// resizing)
-    pub fn resize(&mut self, size: Size<i32>) -> IMG {
-        self.canvas.resize(size)
+    /// Resize every frame's [`Canvas`], returning the previous images in frame
+    /// order (for undoing)
+    pub fn resize(&mut self, size: Size<i32>) -> Vec<IMG> {
+        self.cels
+            .iter_mut()
+            .map(|cel| {
+                cel.invalidate();
+                cel.canvas.resize(size)
+            })
+            .collect()
     }
 
     /// Set whether this layer is visible
@@ -495,5 +663,25 @@ impl<IMG: Bitmap> Layer<IMG> {
     /// Set the opacity of this layer
     pub fn set_opacity(&mut self, opacity: u8) {
         self.opacity = opacity;
+    }
+
+    /// Add a blank cel for a new frame
+    fn add_cel(&mut self, size: Size<i32>) {
+        self.cels.push(Cel::new(size));
+    }
+
+    /// Insert a cel at a frame index, for restoring a removed frame
+    fn insert_cel(&mut self, frame: usize, cel: Cel<IMG>) {
+        self.cels.insert(frame, cel);
+    }
+
+    /// A copy of a frame's cel, for duplicating a frame
+    fn duplicate_cel(&self, frame: usize) -> Cel<IMG> {
+        self.cels[frame].duplicate()
+    }
+
+    /// Remove and return a frame's cel
+    fn remove_cel(&mut self, frame: usize) -> Cel<IMG> {
+        self.cels.remove(frame)
     }
 }
