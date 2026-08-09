@@ -22,6 +22,6 @@ pub enum Error {
     CodecError(#[from] bincode::Error),
     #[error("Invalid palette file: {0}")]
     InvalidPalette(String),
-    #[error("A {cols}x{rows} sheet holds {} layers, but there are {layers}", cols * rows)]
-    SheetTooSmall { cols: u32, rows: u32, layers: u32 },
+    #[error("A {cols}x{rows} sheet has {} cells, but there are {count} to place", cols * rows)]
+    SheetTooSmall { cols: u32, rows: u32, count: u32 },
 }

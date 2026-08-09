@@ -11,8 +11,7 @@ use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
 use lapix::primitives::*;
 use lapix::{
-    Canvas, CanvasEffect, Event, ExportOptions, Layer, LoadProject, SaveProject, Selection, State,
-    Tool,
+    Canvas, CanvasEffect, Event, ExportOptions, LoadProject, SaveProject, Selection, State, Tool,
 };
 use macroquad::prelude::Color as MqColor;
 use macroquad::prelude::{FilterMode, Texture2D};
@@ -107,6 +106,13 @@ pub enum UiEvent {
     /// All the layers tiled into one image, the given number of cells across
     /// and down
     ExportLayerSheet(u8, u8, ExportOptions),
+    /// Ask the menu to put up the export options for the frames
+    ExportFrames,
+    /// One image per frame, into a folder
+    ExportFramesSeparately(ExportOptions),
+    /// Every frame tiled into one image, the given number of cells across and
+    /// down
+    ExportFrameSheet(u8, u8, ExportOptions),
     ImportImage,
     OpenRecent(PathBuf),
     ClearRecent,
@@ -179,6 +185,7 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             new_project_requested: state.new_project_requested,
             export_layers_requested: state.export_layers_requested,
             export_image_requested: state.export_image_requested,
+            export_frames_requested: state.export_frames_requested,
             brush_radius: state.inner.brush_radius(),
             settings: state.settings.clone(),
             ui_scale: state.ui_scale(),
@@ -227,6 +234,9 @@ pub struct UiState {
     /// Set by the Export Image shortcut, and consumed by the menu on the next
     /// frame to raise its options window.
     export_image_requested: bool,
+    /// Set by the Export Frames shortcut, and consumed by the menu on the next
+    /// frame to raise its options window.
+    export_frames_requested: bool,
     /// Where a line, rectangle or ellipse being dragged started. Kept here
     /// because constraining the shape with shift needs the anchor as well as
     /// the cursor.
@@ -276,6 +286,7 @@ impl Default for UiState {
             new_project_requested: false,
             export_layers_requested: false,
             export_image_requested: false,
+            export_frames_requested: false,
             shape_start: None,
         }
     }
@@ -309,6 +320,7 @@ impl UiState {
         self.new_project_requested = false;
         self.export_layers_requested = false;
         self.export_image_requested = false;
+        self.export_frames_requested = false;
         let fx = self.gui.update();
         self.process_fx(fx)?;
 
@@ -780,6 +792,22 @@ impl UiState {
                     self.recent.push(path);
                 }
             }
+            UiEvent::ExportFrames => self.export_frames_requested = true,
+            UiEvent::ExportFramesSeparately(options) => {
+                if let Some(dir) = files::export_layers_dir(self.current_file.as_deref()) {
+                    self.execute(Event::ExportFrames(dir, options))?;
+                }
+            }
+            UiEvent::ExportFrameSheet(cols, rows, options) => {
+                if let Some(path) = files::export_image(self.current_file.as_deref()) {
+                    self.execute(Event::ExportFrameSheet(
+                        path.clone(),
+                        (cols, rows).into(),
+                        options,
+                    ))?;
+                    self.recent.push(path);
+                }
+            }
             UiEvent::ImportImage => {
                 if let Some(path) = files::import_image(self.current_file.as_deref()) {
                     self.open_path(path)?;
@@ -914,14 +942,6 @@ impl UiState {
 
     pub fn zoom(&self) -> f32 {
         self.zoom
-    }
-
-    pub fn layer(&self, index: usize) -> &Layer<WrappedImage> {
-        self.inner.layers().get(index)
-    }
-
-    pub fn num_layers(&self) -> usize {
-        self.inner.layers().count()
     }
 
     pub fn zoom_in(&mut self) {

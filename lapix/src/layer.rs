@@ -173,10 +173,17 @@ impl<IMG: Bitmap> Layers<IMG> {
         })
     }
 
-    /// Blends the stack bottom to top, letting each adjustment layer filter
-    /// everything that has accumulated beneath it.
+    /// Blends the active frame bottom to top, letting each adjustment layer
+    /// filter everything that has accumulated beneath it.
     fn flatten(&self, palette: &[Color]) -> IMG {
-        let mut result = IMG::new(self.canvas_at(0).size(), TRANSPARENT);
+        self.flatten_frame(self.active_frame, palette)
+    }
+
+    /// Blends one frame's stack into a single image. The active frame's result
+    /// is what [`composite`](Self::composite) caches; any frame can be flattened
+    /// this way for export or playback.
+    pub fn flatten_frame(&self, frame: usize, palette: &[Color]) -> IMG {
+        let mut result = IMG::new(self.cel_size(), TRANSPARENT);
 
         for i in 0..self.count() {
             let layer = self.get(i);
@@ -190,7 +197,11 @@ impl<IMG: Bitmap> Layers<IMG> {
                 continue;
             }
 
-            let rendered = self.rendered(i, palette);
+            let rendered = if self.filters_enabled {
+                layer.rendered(frame, palette)
+            } else {
+                Rendered::Source(layer.canvas(frame).inner())
+            };
 
             for x in 0..result.width() {
                 for y in 0..result.height() {

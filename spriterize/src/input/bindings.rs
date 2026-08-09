@@ -394,6 +394,15 @@ impl KeyBindings {
             (
                 vec![
                     InputEvent::KeyModifier(KeyboardModifier::Control),
+                    InputEvent::KeyModifier(KeyboardModifier::Shift),
+                    InputEvent::KeyPress(mq::KeyCode::F.into()),
+                ]
+                .into(),
+                UiEvent::ExportFrames.into(),
+            ),
+            (
+                vec![
+                    InputEvent::KeyModifier(KeyboardModifier::Control),
                     InputEvent::KeyPress(mq::KeyCode::I.into()),
                 ]
                 .into(),

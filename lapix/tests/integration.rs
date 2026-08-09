@@ -963,6 +963,60 @@ fn a_sheet_needs_a_cell_for_every_layer() {
 }
 
 #[cfg(feature = "test-utils")]
+#[test]
+fn a_composited_frame_reflects_all_its_layers() {
+    use lapix::Bitmap;
+
+    let red = Color::new(255, 0, 0, 255);
+    let blue = Color::new(0, 0, 255, 255);
+    let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
+
+    // Bottom layer red across a new frame, top layer one blue dot.
+    state.execute(Event::AddFrame).unwrap();
+    state.execute(Event::SetMainColor(red)).unwrap();
+    state.execute(Event::Bucket(Point::new(0, 0))).unwrap();
+    state.execute(Event::NewLayerAbove).unwrap();
+    state.execute(Event::SwitchLayer(1)).unwrap();
+    state.execute(Event::SetMainColor(blue)).unwrap();
+    state.execute(Event::BrushStart).unwrap();
+    state.execute(Event::BrushStroke(Point::new(1, 1))).unwrap();
+    state.execute(Event::BrushEnd).unwrap();
+
+    // frame_image blends the stack for that frame, regardless of which is
+    // active.
+    state.execute(Event::SwitchFrame(0)).unwrap();
+    let frame1 = state.frame_image(1);
+
+    assert_eq!(frame1.pixel(Point::new(1, 1)), blue);
+    assert_eq!(frame1.pixel(Point::new(0, 0)), red);
+
+    // Frame 0 was never drawn on, so its composite is empty.
+    let frame0 = state.frame_image(0);
+    assert_eq!(frame0.pixel(Point::new(0, 0)), TRANSPARENT);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
+fn a_frame_sheet_needs_a_cell_for_every_frame() {
+    let mut state = State::<TestImage>::new(Size::new(4, 4), None, None);
+
+    state.execute(Event::AddFrame).unwrap();
+    state.execute(Event::AddFrame).unwrap();
+
+    // Three frames won't fit in a 1x1 sheet.
+    let too_small = state.execute(Event::ExportFrameSheet(
+        std::path::PathBuf::from("unused.png"),
+        Size::new(1, 1),
+        lapix::ExportOptions::default(),
+    ));
+
+    assert!(
+        matches!(too_small, Err(lapix::Error::SheetTooSmall { .. })),
+        "expected a sheet size error, got {too_small:?}"
+    );
+}
+
+#[cfg(feature = "test-utils")]
 fn dotted(side: i32, at: Point<i32>, color: Color) -> TestImage {
     use lapix::Bitmap;
 

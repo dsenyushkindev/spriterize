@@ -347,6 +347,10 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::ExportLayerSheet(path, cells, options) => {
                 self.export_layer_sheet(&path, cells, &options)?
             }
+            Event::ExportFrames(path, options) => self.export_frames(&path, &options)?,
+            Event::ExportFrameSheet(path, cells, options) => {
+                self.export_frame_sheet(&path, cells, &options)?
+            }
             Event::OpenFile(path) => self.import_image(path.to_string_lossy().as_ref())?,
             Event::SaveProject(path) => {
                 if let Some(f) = &self.save_project_fn {
@@ -846,49 +850,87 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
     /// bottom into a grid `cells` across and down.
     ///
     /// Layers are all the same size, so they tile exactly. A drawing built up
-    /// as one layer per animation frame comes out as a ready made sprite sheet.
+    /// as one layer per part comes out as a ready made sprite sheet.
     fn export_layer_sheet(
         &self,
         path: &Path,
         cells: Size<u8>,
         options: &ExportOptions,
     ) -> Result<()> {
-        let (cols, rows) = (cells.x.max(1) as i32, cells.y.max(1) as i32);
-        let layers = self.layers.count() as i32;
+        let images = (0..self.layers.count()).map(|i| self.layer_image(i)).collect();
 
-        if cols * rows < layers {
+        self.save_sheet(path, images, cells, options)
+    }
+
+    /// Export the composited image of each frame into a directory as its own
+    /// PNG, numbered in frame order.
+    fn export_frames(&self, dir: &Path, options: &ExportOptions) -> Result<()> {
+        for frame in 0..self.frame_count() {
+            let out = dir.join(format!("frame_{}.png", frame + 1));
+            let image = export::prepare(&self.frame_image(frame), options, None);
+
+            util::save_image(image, out.to_string_lossy().as_ref())?;
+        }
+
+        Ok(())
+    }
+
+    /// Export every frame's composited image, tiled into a grid `cells` across
+    /// and down: the classic sprite sheet of an animation.
+    fn export_frame_sheet(
+        &self,
+        path: &Path,
+        cells: Size<u8>,
+        options: &ExportOptions,
+    ) -> Result<()> {
+        let images = (0..self.frame_count()).map(|f| self.frame_image(f)).collect();
+
+        self.save_sheet(path, images, cells, options)
+    }
+
+    /// Tile a list of same-size images into one sheet and save it.
+    ///
+    /// Shared by the layer and frame sheet exports, since both are "lay these
+    /// images out in a grid". Cropping trims every image to one shared
+    /// rectangle so the cells stay aligned, and sizing to a power of two is held
+    /// back for the finished sheet rather than each cell.
+    fn save_sheet(
+        &self,
+        path: &Path,
+        images: Vec<IMG>,
+        cells: Size<u8>,
+        options: &ExportOptions,
+    ) -> Result<()> {
+        let (cols, rows) = (cells.x.max(1) as i32, cells.y.max(1) as i32);
+
+        if (cols * rows) < images.len() as i32 {
             return Err(Error::SheetTooSmall {
                 cols: cols as u32,
                 rows: rows as u32,
-                layers: layers as u32,
+                count: images.len() as u32,
             });
         }
 
-        let images: Vec<IMG> = (0..layers).map(|i| self.layer_image(i as usize)).collect();
-        // Cells have to stay the same size to tile, so cropping uses one
-        // rectangle covering every layer rather than each layer's own.
         let bounds = options
             .crop
             .then(|| export::shared_bounds(&images))
             .flatten();
-        // Sizing to a power of two belongs to the finished sheet, not to each
-        // cell, so it is held back until the tiling is done.
         let per_cell = ExportOptions {
             power_of_two: false,
             ..options.clone()
         };
-        let cells: Vec<IMG> = images
+        let prepared: Vec<IMG> = images
             .iter()
             .map(|image| export::prepare(image, &per_cell, bounds))
             .collect();
 
-        let cell = cells
+        let cell = prepared
             .first()
             .map(|image| Size::new(image.width(), image.height()))
             .unwrap_or(Size::new(1, 1));
         let mut sheet = IMG::new((cell.x * cols, cell.y * rows).into(), TRANSPARENT);
 
-        for (index, image) in cells.iter().enumerate() {
+        for (index, image) in prepared.iter().enumerate() {
             let index = index as i32;
             let origin = Point::new(index % cols * cell.x, index / cols * cell.y);
 
@@ -906,6 +948,12 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         }
 
         util::save_image(sheet, path.to_string_lossy().as_ref())
+    }
+
+    /// The fully composited image of a frame: every visible layer blended, with
+    /// filters, opacity and adjustment layers applied.
+    pub fn frame_image(&self, frame: usize) -> IMG {
+        self.layers.flatten_frame(frame, self.palette.colors())
     }
 
     /// The image of a single layer as it appears on screen, with the layer's

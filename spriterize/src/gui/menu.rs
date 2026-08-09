@@ -1,6 +1,6 @@
 use crate::gui::export::ExportSettings;
 use crate::{Effect, UiEvent};
-use lapix::{Event, Size, Transform};
+use lapix::{Event, ExportOptions, Size, Transform};
 use std::path::PathBuf;
 
 pub struct MenuBar {
@@ -16,17 +16,58 @@ pub struct MenuBar {
     can_undo: bool,
     can_redo: bool,
     filters_enabled: bool,
-    show_export_layers_window: bool,
+    /// Which of layers or frames the export window is offering, when open.
+    export_window: Option<ExportTarget>,
     show_export_image_window: bool,
     export_settings: ExportSettings,
     canvas_size_for_export: Size<i32>,
-    /// Whether the export window is offering a sheet rather than one file per
-    /// layer.
+    /// Whether the export window is offering a sheet rather than one file each.
     export_as_sheet: bool,
     /// Grid size while it is being typed, so a half finished number doesn't
     /// have to parse.
     sheet_str: (String, String),
     num_layers: usize,
+    frame_count: usize,
+}
+
+/// The two things the export window can lay out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ExportTarget {
+    Layers,
+    Frames,
+}
+
+impl ExportTarget {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Layers => "layer",
+            Self::Frames => "frame",
+        }
+    }
+}
+
+/// The event that carries out an export: a sheet with a grid if one was chosen,
+/// otherwise separate files.
+fn export_event(target: ExportTarget, sheet: Option<(u8, u8)>, options: ExportOptions) -> UiEvent {
+    match (target, sheet) {
+        (ExportTarget::Layers, Some((cols, rows))) => {
+            UiEvent::ExportLayerSheet(cols, rows, options)
+        }
+        (ExportTarget::Layers, None) => UiEvent::ExportLayersSeparately(options),
+        (ExportTarget::Frames, Some((cols, rows))) => {
+            UiEvent::ExportFrameSheet(cols, rows, options)
+        }
+        (ExportTarget::Frames, None) => UiEvent::ExportFramesSeparately(options),
+    }
+}
+
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 impl MenuBar {
@@ -44,13 +85,14 @@ impl MenuBar {
             can_undo: false,
             can_redo: false,
             filters_enabled: true,
-            show_export_layers_window: false,
+            export_window: None,
             show_export_image_window: false,
             export_settings: ExportSettings::new(),
             canvas_size_for_export: Size::ZERO,
             export_as_sheet: false,
             sheet_str: ("1".to_owned(), "1".to_owned()),
             num_layers: 1,
+            frame_count: 1,
         }
     }
 
@@ -64,8 +106,10 @@ impl MenuBar {
         recent_files: Vec<PathBuf>,
         new_project_requested: bool,
         export_layers_requested: bool,
+        export_frames_requested: bool,
         export_image_requested: bool,
         num_layers: usize,
+        frame_count: usize,
         filters_enabled: bool,
     ) {
         self.canvas_size = canvas_size;
@@ -75,16 +119,21 @@ impl MenuBar {
         self.recent_files = recent_files;
         self.filters_enabled = filters_enabled;
         self.num_layers = num_layers;
+        self.frame_count = frame_count;
         self.canvas_size_for_export = canvas_size;
 
         if export_image_requested {
             self.show_export_image_window = true;
         }
 
-        if export_layers_requested {
+        if let Some(target) = export_layers_requested
+            .then_some(ExportTarget::Layers)
+            .or(export_frames_requested.then_some(ExportTarget::Frames))
+        {
             // Start from a grid that fits: a single row of everything.
-            self.sheet_str = (num_layers.to_string(), "1".to_owned());
-            self.show_export_layers_window = true;
+            let count = self.export_count(target);
+            self.sheet_str = (count.to_string(), "1".to_owned());
+            self.export_window = Some(target);
         }
 
         // The New Project shortcut goes through the same confirmation as the
@@ -100,7 +149,7 @@ impl MenuBar {
         events.append(&mut self.update_spritesheet_window(egui_ctx));
         events.append(&mut self.update_confirm_exit_window(egui_ctx));
         events.append(&mut self.update_confirm_new_window(egui_ctx));
-        events.append(&mut self.update_export_layers_window(egui_ctx));
+        events.append(&mut self.update_export_window(egui_ctx));
         events.append(&mut self.update_export_image_window(egui_ctx));
         events
     }
@@ -120,6 +169,7 @@ impl MenuBar {
                         ("Save Project As", "Ctrl+Shift+S", UiEvent::SaveProjectAs),
                         ("Export Image", "Ctrl+E", UiEvent::ExportImage),
                         ("Export Layers", "Ctrl+Shift+E", UiEvent::ExportLayers),
+                        ("Export Frames", "Ctrl+Shift+F", UiEvent::ExportFrames),
                         ("Import Image", "Ctrl+I", UiEvent::ImportImage),
                     ] {
                         if ui
@@ -399,33 +449,44 @@ impl MenuBar {
 
     /// Asks how the layers should come out: one file each, or tiled into a
     /// single sheet.
-    fn update_export_layers_window(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
+    /// How many things the export will lay out.
+    fn export_count(&self, target: ExportTarget) -> usize {
+        match target {
+            ExportTarget::Layers => self.num_layers,
+            ExportTarget::Frames => self.frame_count,
+        }
+    }
+
+    /// One window for both the layer and frame exports, since they differ only
+    /// in what is being tiled and which events they send.
+    fn update_export_window(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
         let mut events = Vec::new();
 
-        if !self.show_export_layers_window {
+        let Some(target) = self.export_window else {
             return events;
-        }
-
+        };
+        let noun = target.noun();
+        let count = self.export_count(target);
         let mut open = true;
 
-        egui::Window::new("Export Layers")
+        egui::Window::new(format!("Export {}s", capitalize(noun)))
             .open(&mut open)
             .resizable(false)
             .default_pos((200., 60.))
             .show(egui_ctx, |ui| {
-                ui.label(format!(
-                    "{} layer{}",
-                    self.num_layers,
-                    if self.num_layers == 1 { "" } else { "s" }
-                ));
+                ui.label(format!("{count} {noun}{}", if count == 1 { "" } else { "s" }));
                 ui.separator();
 
-                ui.radio_value(&mut self.export_as_sheet, false, "One image per layer")
-                    .on_hover_text("into a folder, each named after its layer");
+                ui.radio_value(
+                    &mut self.export_as_sheet,
+                    false,
+                    format!("One image per {noun}"),
+                )
+                .on_hover_text("into a folder, one file each");
                 ui.radio_value(&mut self.export_as_sheet, true, "A single sprite sheet")
-                    .on_hover_text("the layers tiled into a grid, in order from the bottom");
+                    .on_hover_text(format!("the {noun}s tiled into a grid, in order"));
 
-                // How many cells the grid has, and so whether every layer fits.
+                // How many cells the grid has, and so whether everything fits.
                 let grid = self
                     .sheet_str
                     .0
@@ -434,7 +495,7 @@ impl MenuBar {
                     .zip(self.sheet_str.1.parse::<u8>().ok())
                     .filter(|(cols, rows)| *cols > 0 && *rows > 0);
                 let fits = grid
-                    .map(|(cols, rows)| cols as usize * rows as usize >= self.num_layers)
+                    .map(|(cols, rows)| cols as usize * rows as usize >= count)
                     .unwrap_or(false);
 
                 if self.export_as_sheet {
@@ -464,11 +525,11 @@ impl MenuBar {
                             ui.colored_label(
                                 ui.visuals().warn_fg_color,
                                 format!(
-                                    "{}x{} holds {} of {} layers",
+                                    "{}x{} holds {} of {} {noun}s",
                                     cols,
                                     rows,
                                     cols as usize * rows as usize,
-                                    self.num_layers
+                                    count
                                 ),
                             );
                         }
@@ -491,24 +552,19 @@ impl MenuBar {
                         .clicked()
                     {
                         let options = self.export_settings.options.clone();
-                        let event = match (self.export_as_sheet, grid) {
-                            (true, Some((cols, rows))) => {
-                                UiEvent::ExportLayerSheet(cols, rows, options)
-                            }
-                            _ => UiEvent::ExportLayersSeparately(options),
-                        };
+                        let sheet = self.export_as_sheet.then_some(grid).flatten();
 
-                        events.push(Effect::UiEvent(event));
-                        self.show_export_layers_window = false;
+                        events.push(Effect::UiEvent(export_event(target, sheet, options)));
+                        self.export_window = None;
                     }
                     if ui.button("cancel").clicked() {
-                        self.show_export_layers_window = false;
+                        self.export_window = None;
                     }
                 });
             });
 
         if !open {
-            self.show_export_layers_window = false;
+            self.export_window = None;
         }
 
         events

@@ -54,6 +54,7 @@ pub struct GuiSyncParams {
     pub new_project_requested: bool,
     pub export_layers_requested: bool,
     pub export_image_requested: bool,
+    pub export_frames_requested: bool,
     pub brush_radius: u8,
     pub settings: Settings,
     /// Framebuffer pixels per interface point, applied to egui each frame.
@@ -153,8 +154,10 @@ impl Gui {
             params.recent_files.clone(),
             params.new_project_requested,
             params.export_layers_requested,
+            params.export_frames_requested,
             params.export_image_requested,
             params.num_layers,
+            params.frame_count,
             params.filters_enabled,
         );
         self.status_bar.sync(params);
