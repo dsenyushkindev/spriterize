@@ -414,7 +414,11 @@ impl<IMG: Bitmap> Layers<IMG> {
     /// Add a new [`Layer`] above all layers, with a cel for every frame
     pub fn add_new_above(&mut self) {
         self.invalidate_composite();
-        let layer = Layer::new(self.cel_size(), self.unused_default_name(), self.frame_count());
+        let layer = Layer::new(
+            self.cel_size(),
+            self.unused_default_name(),
+            self.frame_count(),
+        );
         self.inner.push(layer);
     }
 

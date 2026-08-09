@@ -111,9 +111,7 @@ impl<IMG> Debug for AtomicAction<IMG> {
                 .field(&i)
                 .field(&filters)
                 .finish(),
-            Self::SetLayerGenerator(i, _) => {
-                f.debug_tuple("SetLayerGenerator").field(&i).finish()
-            }
+            Self::SetLayerGenerator(i, _) => f.debug_tuple("SetLayerGenerator").field(&i).finish(),
             Self::SetLayerAdjustment(i, adjustment) => f
                 .debug_tuple("SetLayerAdjustment")
                 .field(&i)

@@ -474,7 +474,10 @@ impl MenuBar {
             .resizable(false)
             .default_pos((200., 60.))
             .show(egui_ctx, |ui| {
-                ui.label(format!("{count} {noun}{}", if count == 1 { "" } else { "s" }));
+                ui.label(format!(
+                    "{count} {noun}{}",
+                    if count == 1 { "" } else { "s" }
+                ));
                 ui.separator();
 
                 ui.radio_value(

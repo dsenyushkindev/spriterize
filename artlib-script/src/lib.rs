@@ -440,7 +440,12 @@ fn solid(color: i64) -> Shader {
 /// A ramp down the image between rows `y0` and `y1`.
 #[rune::function]
 fn vertical(top: i64, bottom: i64, y0: f64, y1: f64) -> Shader {
-    Shader::wrap(artlib::raster::vertical(unpack(top), unpack(bottom), y0, y1))
+    Shader::wrap(artlib::raster::vertical(
+        unpack(top),
+        unpack(bottom),
+        y0,
+        y1,
+    ))
 }
 
 /// A ramp across the image between columns `x0` and `x1`.
@@ -796,12 +801,7 @@ fn artlib_module() -> Result<Module, rune::ContextError> {
 /// is the knob object (`p.num(...)`, `p.color(...)`, …). `values` supplies the
 /// current setting of each knob by id; pass an empty map to run at the declared
 /// defaults and discover what knobs exist.
-pub fn generate(
-    source: &str,
-    w: usize,
-    h: usize,
-    values: KnobValues,
-) -> Result<Generated, String> {
+pub fn generate(source: &str, w: usize, h: usize, values: KnobValues) -> Result<Generated, String> {
     let module = artlib_module().map_err(|e| e.to_string())?;
     let mut context = Context::with_default_modules().map_err(|e| e.to_string())?;
     context.install(&module).map_err(|e| e.to_string())?;
@@ -830,7 +830,11 @@ pub fn generate(
         .map_err(|e| format!("run error: {e}"))?;
     let canvas: Canvas = rune::from_value(output).map_err(|e| e.to_string())?;
 
-    let knobs = collected.lock().expect("params not poisoned").declared.clone();
+    let knobs = collected
+        .lock()
+        .expect("params not poisoned")
+        .declared
+        .clone();
     Ok(Generated {
         pixels: canvas.inner.to_rgba8(),
         knobs,
@@ -934,7 +938,9 @@ mod tests {
         let g = generate(src, 64, 64, KnobValues::new()).unwrap();
         assert_eq!(g.knobs.len(), 2);
         assert_eq!(g.knobs[0].id, "radius");
-        assert!(matches!(g.knobs[0].kind, KnobKind::Float { min, max } if min == 4.0 && max == 30.0));
+        assert!(
+            matches!(g.knobs[0].kind, KnobKind::Float { min, max } if min == 4.0 && max == 30.0)
+        );
         assert_eq!(g.knobs[0].default, KnobValue::Float(20.0));
         assert_eq!(g.knobs[1].id, "fill");
         assert!(matches!(g.knobs[1].kind, KnobKind::Color));

@@ -7,6 +7,8 @@ use std::path::PathBuf;
 mod export;
 mod frames;
 mod generator;
+// Compiled and tested now; the viewer and layer wiring land in the next graph-editor slice.
+pub(crate) mod graph;
 mod layers;
 mod layout;
 mod menu;
@@ -132,8 +134,8 @@ impl Gui {
     }
 
     /// Open the generator script editor on a layer's script.
-    pub fn open_generator_editor(&mut self, layer: usize, script: String) {
-        self.generator_window.open_for(layer, script);
+    pub fn open_generator_editor(&mut self, layer: usize, generator: Generator) {
+        self.generator_window.open_for(layer, generator);
     }
 
     /// Show the outcome of the last generator apply in the editor.

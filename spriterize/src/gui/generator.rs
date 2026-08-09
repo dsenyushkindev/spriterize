@@ -1,40 +1,31 @@
-//! The generator script editor: a small window bound to one layer.
-//!
-//! A layer's generator recipe (script + knob values) lives on the layer and is
-//! saved with the project; its knobs are edited inline in the Layers panel. This
-//! window is only for editing the *script* — the Layers panel's "Edit script…"
-//! opens it for a specific layer. Applying emits the new script; the running,
-//! the pixel fill and the error all happen in [`UiState`](crate::UiState), which
-//! reports any compile error back here.
+//! Script and graph editors for a layer generator.
 
+use crate::gui::graph::{from_recipe, to_recipe, GraphViewer};
 use crate::{Effect, UiEvent};
+use egui_snarl::ui::SnarlStyle;
+use egui_snarl::Snarl;
+use lapix::{Generator, GeneratorDefinition, GeneratorNode};
 
-/// The script a freshly added generator starts with. Declares a few knobs so the
-/// inline controls appear immediately.
 pub const DEFAULT_SCRIPT: &str = "\
-// Fills this layer. `p` declares knobs, edited in the Layers panel. Returns a
-// Canvas of w x h pixels.
+// Fills this layer. `p` declares knobs, edited in the Layers panel.
 pub fn main(w, h, p) {
     let radius = p.num(\"radius\", 20.0, 2.0, 40.0);
     let fill = p.color(\"fill\", rgb(220, 120, 60));
-    let edge = p.color(\"edge\", rgb(30, 20, 20));
-
-    let cx = w as f64 / 2.0;
-    let cy = h as f64 / 2.0;
     let c = Canvas::new(w, h);
-    let body = disk(cx, cy, radius);
-    c.paint(body, solid(fill));
-    c.paint(outline(body, 2.0, 1.0), solid(edge));
+    c.paint(disk(w as f64 / 2.0, h as f64 / 2.0, radius), solid(fill));
     c
 }
 ";
 
+enum Editor {
+    Script(String),
+    Graph(Snarl<GeneratorNode>),
+}
+
 pub struct GeneratorWindow {
     open: bool,
-    /// The layer whose script is being edited.
     layer: Option<usize>,
-    script: String,
-    /// The last compile/run error for this script, set by `UiState`.
+    editor: Option<Editor>,
     error: Option<String>,
 }
 
@@ -43,29 +34,34 @@ impl GeneratorWindow {
         Self {
             open: false,
             layer: None,
-            script: String::new(),
+            editor: None,
             error: None,
         }
     }
 
-    /// Open the editor on `layer`'s script.
-    pub fn open_for(&mut self, layer: usize, script: String) {
+    pub fn open_for(&mut self, layer: usize, generator: Generator) {
         self.open = true;
         self.layer = Some(layer);
-        self.script = script;
         self.error = None;
+        self.editor = Some(match generator.definition {
+            GeneratorDefinition::Script(script) => Editor::Script(script),
+            GeneratorDefinition::Graph(recipe) => match from_recipe(&recipe) {
+                Ok(graph) => Editor::Graph(graph),
+                Err(error) => {
+                    self.error = Some(error);
+                    Editor::Graph(Snarl::new())
+                }
+            },
+        });
     }
 
-    /// Show the result of the last apply: `None` cleared the error, `Some` is a
-    /// compile or run failure to display.
     pub fn set_error(&mut self, error: Option<String>) {
         self.error = error;
     }
 
     pub fn update(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {
         let mut events = Vec::new();
-
-        let Some(layer) = self.layer else {
+        let (Some(layer), Some(editor)) = (self.layer, self.editor.as_mut()) else {
             return events;
         };
         if !self.open {
@@ -73,41 +69,60 @@ impl GeneratorWindow {
         }
 
         let mut open = self.open;
-
-        egui::Window::new(format!("Generator script — layer {}", layer + 1))
+        let kind = match editor {
+            Editor::Script(_) => "script",
+            Editor::Graph(_) => "graph",
+        };
+        egui::Window::new(format!("Generator {kind} — layer {}", layer + 1))
             .open(&mut open)
-            .default_width(420.)
+            .default_size(match editor {
+                Editor::Script(_) => egui::vec2(480.0, 420.0),
+                Editor::Graph(_) => egui::vec2(820.0, 620.0),
+            })
             .show(egui_ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(320.)
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.script)
-                                .code_editor()
-                                .desired_rows(16)
-                                .desired_width(f32::INFINITY),
-                        );
-                    });
-
-                if ui
-                    .button("Apply")
-                    .on_hover_text("run the script into the layer and save it")
-                    .clicked()
-                {
-                    events.push(Effect::UiEvent(UiEvent::SetGeneratorScript {
+                if ui.button("Apply").clicked() {
+                    let definition = match editor {
+                        Editor::Script(script) => GeneratorDefinition::Script(script.clone()),
+                        Editor::Graph(graph) => GeneratorDefinition::Graph(to_recipe(graph)),
+                    };
+                    events.push(Effect::UiEvent(UiEvent::SetGeneratorDefinition {
                         layer,
-                        script: self.script.clone(),
+                        definition,
                     }));
                 }
 
                 if let Some(error) = &self.error {
-                    ui.separator();
                     ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
                 }
+                ui.separator();
+
+                match editor {
+                    Editor::Script(script) => {
+                        egui::ScrollArea::vertical()
+                            .max_height(340.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(script)
+                                        .code_editor()
+                                        .desired_rows(18)
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
+                    }
+                    Editor::Graph(graph) => {
+                        ui.weak(
+                            "Right-click the graph to add nodes; right-click a node to delete it.",
+                        );
+                        graph.show(
+                            &mut GraphViewer,
+                            &SnarlStyle::new(),
+                            ("generator-graph", layer),
+                            ui,
+                        );
+                    }
+                }
             });
-
         self.open = open;
-
         events
     }
 }

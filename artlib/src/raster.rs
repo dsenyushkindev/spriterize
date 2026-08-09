@@ -107,6 +107,7 @@ pub fn from_field(field: Field, low: Rgba, high: Rgba, lo: f64, hi: f64) -> Shad
 /// One RGBA value per pixel, stored as floats (row-major, `y * w + x`) so
 /// compositing arithmetic stays exact until the final quantisation in
 /// [`Canvas::to_rgba8`].
+#[derive(Clone)]
 pub struct Canvas {
     pub w: usize,
     pub h: usize,

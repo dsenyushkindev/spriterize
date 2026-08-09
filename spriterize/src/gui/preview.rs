@@ -73,9 +73,6 @@ impl Preview {
         let (col, row) = (frame % nx, frame / nx);
         let (w, h) = (1.0 / nx as f32, 1.0 / ny as f32);
 
-        egui::Rect::from_min_size(
-            egui::pos2(col as f32 * w, row as f32 * h),
-            egui::vec2(w, h),
-        )
+        egui::Rect::from_min_size(egui::pos2(col as f32 * w, row as f32 * h), egui::vec2(w, h))
     }
 }

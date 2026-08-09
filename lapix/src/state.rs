@@ -926,7 +926,9 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         cells: Size<u8>,
         options: &ExportOptions,
     ) -> Result<()> {
-        let images = (0..self.layers.count()).map(|i| self.layer_image(i)).collect();
+        let images = (0..self.layers.count())
+            .map(|i| self.layer_image(i))
+            .collect();
 
         self.save_sheet(path, images, cells, options)
     }
@@ -952,7 +954,9 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         cells: Size<u8>,
         options: &ExportOptions,
     ) -> Result<()> {
-        let images = (0..self.frame_count()).map(|f| self.frame_image(f)).collect();
+        let images = (0..self.frame_count())
+            .map(|f| self.frame_image(f))
+            .collect();
 
         self.save_sheet(path, images, cells, options)
     }

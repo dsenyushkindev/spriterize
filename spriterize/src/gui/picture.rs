@@ -52,7 +52,12 @@ impl Picture {
     }
 
     /// Show as a clickable button, framed when `selected`.
-    pub fn button(&mut self, ui: &mut egui::Ui, size: egui::Vec2, selected: bool) -> egui::Response {
+    pub fn button(
+        &mut self,
+        ui: &mut egui::Ui,
+        size: egui::Vec2,
+        selected: bool,
+    ) -> egui::Response {
         let texture = self.texture(ui.ctx());
 
         ui.add(

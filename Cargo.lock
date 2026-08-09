@@ -1792,6 +1792,7 @@ dependencies = [
 name = "spriterize"
 version = "0.1.2"
 dependencies = [
+ "artlib",
  "artlib-script",
  "egui",
  "egui-macroquad",

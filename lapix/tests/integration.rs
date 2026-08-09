@@ -1326,7 +1326,10 @@ fn the_last_frame_cannot_be_deleted() {
     state.execute(Event::DeleteFrame(0)).unwrap();
 
     assert_eq!(state.frame_count(), 1);
-    assert!(!state.can_undo(), "a refused delete records nothing to undo");
+    assert!(
+        !state.can_undo(),
+        "a refused delete records nothing to undo"
+    );
 }
 
 #[cfg(feature = "test-utils")]

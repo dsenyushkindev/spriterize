@@ -122,7 +122,10 @@ impl Grid {
     }
 
     pub fn remap(&self, lo: f64, hi: f64) -> Grid {
-        Grid::from_vec(self.size, self.v.iter().map(|x| lo + (hi - lo) * x).collect())
+        Grid::from_vec(
+            self.size,
+            self.v.iter().map(|x| lo + (hi - lo) * x).collect(),
+        )
     }
 
     /// Snap to discrete levels — sedimentary banding.
@@ -283,7 +286,11 @@ impl std::ops::Add<Grid> for Grid {
 
 /// For each axis position, the two lattice cells straddling it and the fraction
 /// between — precomputed once and shared by both axes, as numpy broadcasts them.
-fn lattice_axes(size: usize, period: usize, smoothing: fn(f64) -> f64) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+fn lattice_axes(
+    size: usize,
+    period: usize,
+    smoothing: fn(f64) -> f64,
+) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
     let step = size as f64 / period as f64;
     let mut i0 = vec![0usize; size];
     let mut i1 = vec![0usize; size];

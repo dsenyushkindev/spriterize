@@ -111,7 +111,9 @@ fn golden(name: &str) -> Vec<u8> {
         name
     );
     image::open(&path)
-        .unwrap_or_else(|e| panic!("open golden {path}: {e} (run: python artlib/tests/gen_golden.py)"))
+        .unwrap_or_else(|e| {
+            panic!("open golden {path}: {e} (run: python artlib/tests/gen_golden.py)")
+        })
         .to_rgba8()
         .into_raw()
 }
@@ -133,10 +135,17 @@ fn dsl_scenes_match_golden() {
         let px = artlib_script::run_script(&script(name), SIZE, SIZE)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         let d = max_channel_diff(&px, &golden(name));
-        println!("{name:>14}: max channel diff {d}  {}", if d == 0 { "exact" } else { "!!" });
+        println!(
+            "{name:>14}: max channel diff {d}  {}",
+            if d == 0 { "exact" } else { "!!" }
+        );
         if d != 0 {
             failures.push(format!("{name}: max channel diff {d}"));
         }
     }
-    assert!(failures.is_empty(), "DSL parity failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "DSL parity failures:\n{}",
+        failures.join("\n")
+    );
 }

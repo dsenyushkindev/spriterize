@@ -97,7 +97,12 @@ fn build(name: &str) -> Canvas {
             );
         }
         "mirror4" => {
-            c.paint(&mirror4(disk(12., 12., 7.), 64., 64.), &solid(GOLD), true, 1.0);
+            c.paint(
+                &mirror4(disk(12., 12., 7.), 64., 64.),
+                &solid(GOLD),
+                true,
+                1.0,
+            );
         }
         "rotate" => {
             c.paint(
@@ -128,7 +133,12 @@ fn build(name: &str) -> Canvas {
             );
         }
         "horizontal" => {
-            c.paint(&rect(4., 4., 60., 60.), &horizontal(RED, BLUE, 0., 59.), true, 1.0);
+            c.paint(
+                &rect(4., 4., 60., 60.),
+                &horizontal(RED, BLUE, 0., 59.),
+                true,
+                1.0,
+            );
         }
         "from_field" => {
             let d = disk(32., 32., 30.);
@@ -175,7 +185,9 @@ const SCENES: &[&str] = &[
 fn golden(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/golden/{}.png", env!("CARGO_MANIFEST_DIR"), name);
     image::open(&path)
-        .unwrap_or_else(|e| panic!("open golden {path}: {e} (run: python artlib/tests/gen_golden.py)"))
+        .unwrap_or_else(|e| {
+            panic!("open golden {path}: {e} (run: python artlib/tests/gen_golden.py)")
+        })
         .to_rgba8()
         .into_raw()
 }
@@ -224,7 +236,11 @@ fn deterministic_scenes_match_python() {
             ));
         }
     }
-    assert!(failures.is_empty(), "parity failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "parity failures:\n{}",
+        failures.join("\n")
+    );
 }
 
 /// A grid is a field: `from_field` colouring a deterministic distance field is

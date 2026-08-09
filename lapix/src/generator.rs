@@ -1,21 +1,13 @@
-//! A layer's procedural generator: the recipe that fills its pixels.
+//! A layer's procedural generator recipe.
 //!
-//! Like a [`Filter`](crate::Filter), a generator is data a layer carries and the
-//! project saves — but where a filter changes how stored pixels *look*, a
-//! generator *produces* them. It holds the artlib script that fills the layer
-//! and the current value of each knob that script declares, so it can be re-run
-//! and re-tuned any number of times, across sessions.
-//!
-//! The script is run by the frontend (the core has no scripting engine); lapix
-//! only stores the recipe and takes the resulting pixels through
-//! [`State::set_layer_generator`](crate::State::set_layer_generator). The knob
-//! *declarations* (kind, range) come from running the script, so only each
-//! knob's current *value* is stored here.
+//! The frontend executes either an artlib script or a visual artlib graph and
+//! hands the resulting pixels to `State::set_layer_generator`. Lapix stores the
+//! definition and its current named parameter values so both representations
+//! are saved, undoable, and re-runnable without depending on either executor.
 
 use crate::Color;
 use serde::{Deserialize, Serialize};
 
-/// The stored value of one knob.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GenValue {
     Float(f32),
@@ -24,30 +16,129 @@ pub enum GenValue {
     Bool(bool),
 }
 
-/// A layer's generator: the script that fills it, plus each knob's value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GeneratorDefinition {
+    Script(String),
+    Graph(GeneratorGraph),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GeneratorGraph {
+    pub nodes: Vec<GeneratorGraphNode>,
+    pub wires: Vec<GeneratorGraphWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeneratorGraphNode {
+    pub id: u64,
+    pub position: [f32; 2],
+    pub node: GeneratorNode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratorGraphWire {
+    pub from_node: u64,
+    pub from_output: usize,
+    pub to_node: u64,
+    pub to_input: usize,
+}
+
+/// Serializable artlib graph vocabulary. Scalar fields are fallback values
+/// used when their corresponding input socket is not connected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GeneratorNode {
+    FloatKnob {
+        id: String,
+        default: f32,
+        min: f32,
+        max: f32,
+    },
+    IntKnob {
+        id: String,
+        default: i64,
+        min: i64,
+        max: i64,
+    },
+    ColorKnob {
+        id: String,
+        default: [u8; 4],
+    },
+    BoolKnob {
+        id: String,
+        default: bool,
+    },
+    Disk {
+        cx: f32,
+        cy: f32,
+        r: f32,
+    },
+    Rect {
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+    },
+    Perlin {
+        period: i64,
+        seed: i64,
+    },
+    Union,
+    Outline {
+        weight: f32,
+        inset: f32,
+    },
+    Solid {
+        color: [u8; 4],
+    },
+    FromGrid {
+        low: [u8; 4],
+        high: [u8; 4],
+    },
+    Paint {
+        antialias: bool,
+        opacity: f32,
+    },
+    Output,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Generator {
-    /// The artlib DSL source, defining `pub fn main(w, h, p)`.
-    pub script: String,
-    /// Knob values by id, in the order the script declares them. A value that
-    /// isn't here falls back to the script's declared default, so a script that
-    /// gains a knob keeps working on projects saved before it existed.
+    pub definition: GeneratorDefinition,
     values: Vec<(String, GenValue)>,
 }
 
 impl Generator {
-    /// A generator that runs `script` with every knob at its declared default.
     pub fn new(script: String) -> Self {
-        Self {
-            script,
-            values: Vec::new(),
+        Self::with_definition(GeneratorDefinition::Script(script), Vec::new())
+    }
+
+    pub fn graph(graph: GeneratorGraph) -> Self {
+        Self::with_definition(GeneratorDefinition::Graph(graph), Vec::new())
+    }
+
+    pub fn with_values(script: String, values: Vec<(String, GenValue)>) -> Self {
+        Self::with_definition(GeneratorDefinition::Script(script), values)
+    }
+
+    pub fn with_definition(
+        definition: GeneratorDefinition,
+        values: Vec<(String, GenValue)>,
+    ) -> Self {
+        Self { definition, values }
+    }
+
+    pub fn script(&self) -> Option<&str> {
+        match &self.definition {
+            GeneratorDefinition::Script(script) => Some(script),
+            GeneratorDefinition::Graph(_) => None,
         }
     }
 
-    /// A generator with a script and a set of knob values already in hand — for
-    /// re-editing the script while keeping the values.
-    pub fn with_values(script: String, values: Vec<(String, GenValue)>) -> Self {
-        Self { script, values }
+    pub fn graph_definition(&self) -> Option<&GeneratorGraph> {
+        match &self.definition {
+            GeneratorDefinition::Graph(graph) => Some(graph),
+            GeneratorDefinition::Script(_) => None,
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<&GenValue> {
@@ -64,8 +155,30 @@ impl Generator {
         }
     }
 
-    /// Every stored knob value, in declaration order.
     pub fn values(&self) -> &[(String, GenValue)] {
         &self.values
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_generator_round_trips_through_project_encoding() {
+        let graph = GeneratorGraph {
+            nodes: vec![GeneratorGraphNode {
+                id: 7,
+                position: [12.0, 34.0],
+                node: GeneratorNode::Output,
+            }],
+            wires: Vec::new(),
+        };
+        let mut generator = Generator::graph(graph);
+        generator.set("radius", GenValue::Float(12.0));
+
+        let bytes = bincode::serialize(&generator).unwrap();
+        let decoded: Generator = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, generator);
     }
 }

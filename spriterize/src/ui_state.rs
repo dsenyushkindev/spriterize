@@ -12,8 +12,8 @@ use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
 use lapix::primitives::*;
 use lapix::{
-    Bitmap, Canvas, CanvasEffect, Event, ExportOptions, GenValue, Generator, LoadProject,
-    SaveProject, Selection, State, Tool,
+    Bitmap, Canvas, CanvasEffect, Event, ExportOptions, GenValue, Generator, GeneratorDefinition,
+    LoadProject, SaveProject, Selection, State, Tool,
 };
 use macroquad::prelude::Color as MqColor;
 use macroquad::prelude::{FilterMode, Texture2D};
@@ -101,10 +101,10 @@ pub enum UiEvent {
         layer: usize,
         generator: Generator,
     },
-    /// Re-run a layer's generator with an edited script, keeping its knob values.
-    SetGeneratorScript {
+    /// Replace only the script/graph definition, preserving current knob values.
+    SetGeneratorDefinition {
         layer: usize,
-        script: String,
+        definition: GeneratorDefinition,
     },
     /// Remove a layer's generator recipe, leaving the pixels it made.
     RemoveGenerator {
@@ -161,6 +161,23 @@ fn generator_knob_values(generator: &Generator) -> artlib_script::KnobValues {
         .values()
         .iter()
         .map(|(id, value)| (id.clone(), gen_value_to_knob(value)))
+        .collect()
+}
+
+fn graph_knob_values(generator: &Generator) -> crate::gui::graph::KnobValues {
+    generator
+        .values()
+        .iter()
+        .map(|(id, value)| {
+            use crate::gui::graph::KnobValue;
+            let value = match value {
+                GenValue::Float(v) => KnobValue::Float(*v),
+                GenValue::Int(v) => KnobValue::Int(*v),
+                GenValue::Color(c) => KnobValue::Color([c.r, c.g, c.b, c.a]),
+                GenValue::Bool(v) => KnobValue::Bool(*v),
+            };
+            (id.clone(), value)
+        })
         .collect()
 }
 
@@ -811,17 +828,36 @@ impl UiState {
     fn apply_generator(&mut self, layer: usize, generator: Generator) -> Result<()> {
         let size = self.inner.canvas().size();
         let (w, h) = (size.x.max(1) as usize, size.y.max(1) as usize);
-        let values = generator_knob_values(&generator);
+        let result = match &generator.definition {
+            GeneratorDefinition::Script(script) => {
+                artlib_script::generate(script, w, h, generator_knob_values(&generator))
+                    .map(|generated| generated.pixels)
+            }
+            GeneratorDefinition::Graph(recipe) => {
+                crate::gui::graph::from_recipe(recipe).and_then(|graph| {
+                    crate::gui::graph::evaluate_with_values(
+                        &graph,
+                        w,
+                        h,
+                        &graph_knob_values(&generator),
+                    )
+                })
+            }
+        };
 
-        match artlib_script::generate(&generator.script, w, h, values) {
-            Ok(result) => {
-                let img = WrappedImage::from_parts(Size::new(w as i32, h as i32), &result.pixels);
-                let effect = self.inner.set_layer_generator(layer, Some(generator), Some(img))?;
+        match result {
+            Ok(pixels) => {
+                let img = WrappedImage::from_parts(Size::new(w as i32, h as i32), &pixels);
+                let effect = self
+                    .inner
+                    .set_layer_generator(layer, Some(generator), Some(img))?;
                 self.apply_canvas_effect(effect);
                 self.gui.set_generator_error(None);
             }
             Err(message) => {
-                let effect = self.inner.set_layer_generator(layer, Some(generator), None)?;
+                let effect = self
+                    .inner
+                    .set_layer_generator(layer, Some(generator), None)?;
                 self.apply_canvas_effect(effect);
                 self.gui.set_generator_error(Some(message));
             }
@@ -969,21 +1005,15 @@ impl UiState {
             UiEvent::ToggleOnionSkin => self.onion_skin = !self.onion_skin,
             UiEvent::OpenSettings => self.gui.open_settings(),
             UiEvent::OpenGeneratorEditor { layer } => {
-                let script = self
-                    .inner
-                    .layers()
-                    .get(layer)
-                    .generator()
-                    .map(|generator| generator.script.clone())
-                    .unwrap_or_default();
-                self.gui.open_generator_editor(layer, script);
+                let generator = self.inner.layers().get(layer).generator().cloned();
+                if let Some(generator) = generator {
+                    self.gui.open_generator_editor(layer, generator);
+                }
             }
             UiEvent::UpdateGenerator { layer, generator } => {
                 self.apply_generator(layer, generator)?;
             }
-            UiEvent::SetGeneratorScript { layer, script } => {
-                // Keep the knob values the layer already has; only the code
-                // changed.
+            UiEvent::SetGeneratorDefinition { layer, definition } => {
                 let values = self
                     .inner
                     .layers()
@@ -991,7 +1021,7 @@ impl UiState {
                     .generator()
                     .map(|generator| generator.values().to_vec())
                     .unwrap_or_default();
-                self.apply_generator(layer, Generator::with_values(script, values))?;
+                self.apply_generator(layer, Generator::with_definition(definition, values))?;
             }
             UiEvent::RemoveGenerator { layer } => {
                 let effect = self.inner.set_layer_generator(layer, None, None)?;

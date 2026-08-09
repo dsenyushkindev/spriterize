@@ -1,9 +1,10 @@
 use crate::gui::generator::DEFAULT_SCRIPT;
+use crate::gui::graph::default_recipe;
 use crate::gui::layout::{self, PanelLayout};
 use crate::{Effect, UiEvent};
 use artlib_script::{Knob, KnobKind, KnobValue};
 use lapix::filter::{ParamKind, Value};
-use lapix::{Event, Filter, GenValue, Generator};
+use lapix::{Event, Filter, GenValue, Generator, GeneratorDefinition, GeneratorNode};
 use std::collections::HashMap;
 
 /// The settings of one filter. Returns the filter with them applied, if any
@@ -180,6 +181,75 @@ fn gen_bool_default(knob: &Knob) -> bool {
         KnobValue::Bool(v) => *v,
         _ => false,
     }
+}
+
+fn graph_knobs(generator: &Generator) -> Result<Vec<Knob>, String> {
+    let Some(graph) = generator.graph_definition() else {
+        return Ok(Vec::new());
+    };
+    let mut ids = std::collections::HashSet::new();
+    let mut knobs = Vec::new();
+    for held in &graph.nodes {
+        let knob = match &held.node {
+            GeneratorNode::FloatKnob {
+                id,
+                default,
+                min,
+                max,
+            } => {
+                if !default.is_finite() || !min.is_finite() || !max.is_finite() || min > max {
+                    return Err(format!("invalid range for parameter `{id}`"));
+                }
+                Some(Knob {
+                    id: id.clone(),
+                    kind: KnobKind::Float {
+                        min: *min as f64,
+                        max: *max as f64,
+                    },
+                    default: KnobValue::Float(*default as f64),
+                })
+            }
+            GeneratorNode::IntKnob {
+                id,
+                default,
+                min,
+                max,
+            } => {
+                if min > max {
+                    return Err(format!("invalid range for parameter `{id}`"));
+                }
+                Some(Knob {
+                    id: id.clone(),
+                    kind: KnobKind::Int {
+                        min: *min,
+                        max: *max,
+                    },
+                    default: KnobValue::Int(*default),
+                })
+            }
+            GeneratorNode::ColorKnob { id, default } => Some(Knob {
+                id: id.clone(),
+                kind: KnobKind::Color,
+                default: KnobValue::Color(*default),
+            }),
+            GeneratorNode::BoolKnob { id, default } => Some(Knob {
+                id: id.clone(),
+                kind: KnobKind::Bool,
+                default: KnobValue::Bool(*default),
+            }),
+            _ => None,
+        };
+        if let Some(knob) = knob {
+            if knob.id.trim().is_empty() {
+                return Err("a graph parameter has an empty name".to_owned());
+            }
+            if !ids.insert(knob.id.clone()) {
+                return Err(format!("duplicate parameter name `{}`", knob.id));
+            }
+            knobs.push(knob);
+        }
+    }
+    Ok(knobs)
 }
 
 /// Narrowest the layer name field is allowed to get, whatever the other columns
@@ -363,23 +433,29 @@ impl LayersPanel {
         let generator = self.layers_generators[layer].clone();
 
         let Some(generator) = generator else {
-            if ui
-                .button("Add generator")
-                .on_hover_text("fill this layer from an artlib script")
-                .clicked()
-            {
-                events.push(Effect::UiEvent(UiEvent::UpdateGenerator {
-                    layer,
-                    generator: Generator::new(DEFAULT_SCRIPT.to_owned()),
-                }));
-            }
+            ui.horizontal(|ui| {
+                if ui.button("Add script").clicked() {
+                    events.push(Effect::UiEvent(UiEvent::UpdateGenerator {
+                        layer,
+                        generator: Generator::new(DEFAULT_SCRIPT.to_owned()),
+                    }));
+                }
+                if ui.button("Add graph").clicked() {
+                    events.push(Effect::UiEvent(UiEvent::UpdateGenerator {
+                        layer,
+                        generator: Generator::graph(default_recipe()),
+                    }));
+                }
+            });
             return;
         };
 
         ui.horizontal(|ui| {
             if ui
-                .button("Edit script…")
-                .on_hover_text("open this layer's script")
+                .button(match generator.definition {
+                    GeneratorDefinition::Script(_) => "Edit script…",
+                    GeneratorDefinition::Graph(_) => "Edit graph…",
+                })
                 .clicked()
             {
                 events.push(Effect::UiEvent(UiEvent::OpenGeneratorEditor { layer }));
@@ -393,13 +469,18 @@ impl LayersPanel {
             }
         });
 
-        // The declarations come from running the script; cache them by script so
-        // this doesn't run every frame.
         let (w, h) = self.canvas_size;
-        let knobs = self
-            .knob_cache
-            .entry(generator.script.clone())
-            .or_insert_with(|| artlib_script::declared_knobs(&generator.script, w, h));
+        let graph_declared;
+        let knobs = match &generator.definition {
+            GeneratorDefinition::Script(script) => self
+                .knob_cache
+                .entry(script.clone())
+                .or_insert_with(|| artlib_script::declared_knobs(script, w, h)),
+            GeneratorDefinition::Graph(_) => {
+                graph_declared = graph_knobs(&generator);
+                &graph_declared
+            }
+        };
 
         match knobs {
             Ok(knobs) => {
@@ -420,7 +501,10 @@ impl LayersPanel {
                 }
 
                 if let Some(generator) = updated {
-                    events.push(Effect::UiEvent(UiEvent::UpdateGenerator { layer, generator }));
+                    events.push(Effect::UiEvent(UiEvent::UpdateGenerator {
+                        layer,
+                        generator,
+                    }));
                 }
             }
             Err(error) => {

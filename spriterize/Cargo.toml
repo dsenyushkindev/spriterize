@@ -16,6 +16,7 @@ license = "MIT/Apache-2.0"
 
 [dependencies]
 lapix = { path = "../lapix", version = "0.1.2" }
+artlib = { path = "../artlib" }
 artlib-script = { path = "../artlib-script" }
 egui-macroquad = { version = "0.17.3", default-features = false }
 macroquad = "0.4.15"

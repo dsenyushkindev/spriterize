@@ -29,7 +29,10 @@ fn every_source_is_deterministic() {
     assert_eq!(value_noise(N, 4, 7).v, value_noise(N, 4, 7).v);
     assert_eq!(perlin(N, 4, 7).v, perlin(N, 4, 7).v);
     assert_eq!(worley(N, 5, 7).v, worley(N, 5, 7).v);
-    assert_eq!(fbm(N, 7, 4, 4, perlin, 0.5).v, fbm(N, 7, 4, 4, perlin, 0.5).v);
+    assert_eq!(
+        fbm(N, 7, 4, 4, perlin, 0.5).v,
+        fbm(N, 7, 4, 4, perlin, 0.5).v
+    );
     assert_eq!(ridged(N, 7, 3, 4, perlin).v, ridged(N, 7, 3, 4, perlin).v);
     assert_eq!(stripes(N, 3, 1, 0.0).v, stripes(N, 3, 1, 0.0).v);
 }
@@ -61,7 +64,10 @@ fn unnormalized_sources_stay_in_range() {
     // 0.5 and stripes is a shifted sine — all comfortably within [0,1].
     for g in [value_noise(N, 4, 1), perlin(N, 4, 1), stripes(N, 2, 1, 0.0)] {
         let (lo, hi) = range(&g);
-        assert!(lo >= -1e-9 && hi <= 1.0 + 1e-9, "range {lo}..{hi} escapes [0,1]");
+        assert!(
+            lo >= -1e-9 && hi <= 1.0 + 1e-9,
+            "range {lo}..{hi} escapes [0,1]"
+        );
     }
 }
 
@@ -98,7 +104,10 @@ fn constant_is_flat() {
 fn grid_arithmetic_matches_elementwise() {
     let a = constant(4, 0.2);
     let b = constant(4, 0.5);
-    assert!((a.clone() + b.clone()).v.iter().all(|&v| (v - 0.7).abs() < 1e-12));
+    assert!((a.clone() + b.clone())
+        .v
+        .iter()
+        .all(|&v| (v - 0.7).abs() < 1e-12));
     assert!((a * 3.0).v.iter().all(|&v| (v - 0.6).abs() < 1e-12));
 }
 
