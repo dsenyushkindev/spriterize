@@ -28,6 +28,9 @@ pub const CANVAS_H: u16 = 64;
 const LEFT_TOOLBAR_W: u16 = 300;
 const CAMERA_SPEED: f32 = 12.;
 const BG_COLOR: MqColor = crate::theme::CANVAS_SURROUND;
+/// The previous-frame ghost: faint and tinted red, so it reads as a guide
+/// rather than as real pixels.
+const ONION_TINT: MqColor = MqColor::new(1.0, 0.55, 0.55, 0.35);
 const GUI_REST_MS: u64 = 100;
 const FPS_INTERVAL: usize = 15;
 const DEFAULT_ZOOM_LEVEL: f32 = 8.;
@@ -85,6 +88,7 @@ pub enum UiEvent {
     TogglePlayback,
     StopPlayback,
     SetPlaybackFps(f32),
+    ToggleOnionSkin,
     SetUiScale(f32),
     OpenSettings,
     ResetLayout,
@@ -175,6 +179,7 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             active_frame: state.inner.active_frame(),
             is_playing: state.playback.is_playing(),
             playback_fps: state.playback.fps(),
+            onion_skin: state.onion_skin,
             palette: state.inner.palette().iter().map(|c| (*c).into()).collect(),
             mouse_canvas: (x, y).into(),
             is_on_canvas: in_canvas,
@@ -245,6 +250,17 @@ pub struct UiState {
     export_frames_requested: bool,
     /// Plays the animation by advancing frames over time.
     playback: Playback,
+    /// Whether a faint ghost of the previous frame is drawn on the canvas.
+    /// A view aid, not saved.
+    onion_skin: bool,
+    /// The previous-frame ghost, rebuilt when its frame or the pixels change.
+    onion_texture: Option<Texture2D>,
+    /// Which frame the ghost holds, and the content version it was built at.
+    onion_key: Option<(usize, u64)>,
+    /// Whether the frame thumbnails need rebuilding, and a version that bumps
+    /// on every pixel change so caches keyed by it can tell.
+    frames_dirty: bool,
+    content_version: u64,
     /// Where a line, rectangle or ellipse being dragged started. Kept here
     /// because constraining the shape with shift needs the anchor as well as
     /// the cursor.
@@ -292,6 +308,11 @@ impl Default for UiState {
             current_file: None,
             recent: RecentFiles::load(),
             playback: Playback::new(),
+            onion_skin: false,
+            onion_texture: None,
+            onion_key: None,
+            frames_dirty: true,
+            content_version: 0,
             new_project_requested: false,
             export_layers_requested: false,
             export_image_requested: false,
@@ -324,6 +345,25 @@ impl UiState {
         self.handle_dropped_files()?;
 
         self.gui.sync((&*self).into());
+        // Rebuild the frame thumbnails only when the frames' pixels changed,
+        // not every frame. Done after sync so the panel draws them this frame.
+        if self.frames_dirty {
+            self.frames_dirty = false;
+            let thumbnails = self.frame_thumbnails();
+            self.gui.set_frame_thumbnails(thumbnails);
+
+            // The preview shows the active frame's composite, which the canvas
+            // texture already reflects; hand the same pixels to egui.
+            let (w, h, bytes) = {
+                let composite = self.inner.composite();
+                (
+                    composite.0.width as usize,
+                    composite.0.height as usize,
+                    composite.0.bytes.clone(),
+                )
+            };
+            self.gui.set_preview_image(w, h, &bytes);
+        }
         // The menu has now seen these and raised its windows, so they mustn't be
         // raised again on the following frames.
         self.new_project_requested = false;
@@ -622,6 +662,7 @@ impl UiState {
         let ctx = self.draw_ctx();
 
         self.bg.draw(ctx);
+        self.draw_onion_skin(ctx);
         graphics::draw_canvas(&*self);
         graphics::draw_grid(ctx);
         graphics::draw_spritesheet_boundaries(ctx);
@@ -669,7 +710,6 @@ impl UiState {
         }
 
         egui_macroquad::draw();
-        self.gui.draw_preview(self);
         self.mouse.draw();
 
         self.schedule_next_frame();
@@ -695,19 +735,93 @@ impl UiState {
             // Re-uploads the flattened stack, so filters and adjustment layers
             // are included in what gets drawn.
             CanvasEffect::Update => {
-                let composite = self.inner.composite();
-
-                self.canvas_texture.update(&composite.0);
+                {
+                    let composite = self.inner.composite();
+                    self.canvas_texture.update(&composite.0);
+                }
+                self.mark_frames_changed();
             }
             // The canvas may have changed size, so the texture is rebuilt
             // rather than written over.
             CanvasEffect::New | CanvasEffect::Layer => {
                 self.sync_canvas_texture();
+                self.mark_frames_changed();
             }
             CanvasEffect::None => (),
         };
 
         Ok(())
+    }
+
+    /// Note that the frames' pixels changed, so the thumbnails and the onion
+    /// ghost are rebuilt from the new content.
+    fn mark_frames_changed(&mut self) {
+        self.frames_dirty = true;
+        self.content_version = self.content_version.wrapping_add(1);
+    }
+
+    /// The composited pixels of every frame, for the thumbnails.
+    fn frame_thumbnails(&self) -> Vec<crate::gui::FrameImage> {
+        (0..self.inner.frame_count())
+            .map(|frame| {
+                let image = self.inner.frame_image(frame);
+
+                (
+                    image.0.width as usize,
+                    image.0.height as usize,
+                    image.0.bytes.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Which frame the onion skin should show, if any: the frame before the
+    /// active one. There is none on the first frame, and it is hidden during
+    /// playback where ghosts would only distract.
+    fn onion_frame(&self) -> Option<usize> {
+        let active = self.inner.active_frame();
+        let show = self.onion_skin && !self.playback.is_playing() && active > 0;
+
+        // `then`, not `then_some`: the latter would compute `active - 1` even
+        // when `show` is false, underflowing on frame 0.
+        show.then(|| active - 1)
+    }
+
+    /// Draws a faint ghost of the previous frame under the current one, so the
+    /// motion between them is visible while drawing.
+    fn draw_onion_skin(&mut self, ctx: DrawContext) {
+        use macroquad::prelude::*;
+
+        let Some(frame) = self.onion_frame() else {
+            return;
+        };
+
+        // Rebuild the ghost texture only when the frame it shows or the pixels
+        // change, not on every redraw while drawing.
+        let key = (frame, self.content_version);
+        if self.onion_key != Some(key) {
+            let image = self.inner.frame_image(frame);
+            let texture = Texture2D::from_image(&image.0);
+            texture.set_filter(FilterMode::Nearest);
+            self.onion_texture = Some(texture);
+            self.onion_key = Some(key);
+        }
+
+        let Some(texture) = &self.onion_texture else {
+            return;
+        };
+        let p = ctx.canvas_pos - ctx.camera;
+        let params = DrawTextureParams {
+            dest_size: Some(vec2(
+                ctx.canvas_size.x * ctx.scale,
+                ctx.canvas_size.y * ctx.scale,
+            )),
+            ..Default::default()
+        };
+
+        // Faint, tinted towards red so the ghost reads as "not the current
+        // frame" rather than as real pixels.
+        draw_texture_ex(texture, p.x, p.y, ONION_TINT, params);
     }
 
     /// Rebuilds the canvas texture from the flattened stack.
@@ -775,6 +889,7 @@ impl UiState {
                 self.execute(Event::SwitchFrame(0))?;
             }
             UiEvent::SetPlaybackFps(fps) => self.playback.set_fps(fps),
+            UiEvent::ToggleOnionSkin => self.onion_skin = !self.onion_skin,
             UiEvent::OpenSettings => self.gui.open_settings(),
             UiEvent::ResetLayout => self.gui.reset_layout(),
             UiEvent::MoveCamera(dir) => self.move_camera(dir),

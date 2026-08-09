@@ -1,5 +1,5 @@
 use crate::settings::Settings;
-use crate::{Effect, UiEvent, UiState};
+use crate::{Effect, UiEvent};
 use lapix::{Filter, Position, Size, Tool};
 use macroquad::prelude::*;
 use std::path::PathBuf;
@@ -10,11 +10,13 @@ mod layers;
 mod layout;
 mod menu;
 mod palette;
+mod picture;
 mod preview;
 mod settings;
 mod status;
 mod toolbar;
 
+pub use frames::FrameImage;
 use frames::FramesPanel;
 use layers::LayersPanel;
 use layout::PanelLayout;
@@ -39,6 +41,7 @@ pub struct GuiSyncParams {
     pub active_frame: usize,
     pub is_playing: bool,
     pub playback_fps: f32,
+    pub onion_skin: bool,
     pub filters_enabled: bool,
     pub palette: Vec<[u8; 4]>,
     pub mouse_canvas: Position<i32>,
@@ -107,6 +110,18 @@ impl Gui {
         self.wants_repaint
     }
 
+    /// Hand the frames panel fresh thumbnail pixels. Called only when the
+    /// frames' content changes, not every frame.
+    pub fn set_frame_thumbnails(&mut self, images: Vec<frames::FrameImage>) {
+        self.frames_panel.set_thumbnails(images);
+    }
+
+    /// Hand the preview the composited pixels it shows. Called only when the
+    /// content changes.
+    pub fn set_preview_image(&mut self, width: usize, height: usize, rgba: &[u8]) {
+        self.preview.set_image(width, height, rgba);
+    }
+
     pub fn open_settings(&mut self) {
         self.settings_window.open();
     }
@@ -140,14 +155,10 @@ impl Gui {
             params.frame_count,
             params.active_frame,
             params.is_playing,
+            params.onion_skin,
             params.playback_fps,
         );
-        self.preview.sync(
-            params.spritesheet,
-            params.canvas_size,
-            params.layers_vis.clone(),
-            params.layers_alpha.clone(),
-        );
+        self.preview.sync(params.spritesheet, params.canvas_size);
         self.ui_scale = params.ui_scale;
         self.settings_window
             .sync(params.settings.clone(), params.dpi_scale);
@@ -217,10 +228,6 @@ impl Gui {
         });
 
         events
-    }
-
-    pub fn draw_preview(&self, state: &UiState) {
-        self.preview.draw(state);
     }
 
     fn update_canvas_panel(&mut self, egui_ctx: &egui::Context) -> Vec<Effect> {

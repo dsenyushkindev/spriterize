@@ -1,10 +1,18 @@
 use crate::gui::layout::{self, PanelLayout};
+use crate::gui::picture::Picture;
 use crate::playback::{MAX_FPS, MIN_FPS};
 use crate::{Effect, UiEvent};
 use lapix::Event;
 
-/// The animation frames: a row of them, controls to add, duplicate and delete,
-/// and playback.
+/// One frame's composited pixels: width, height and RGBA bytes.
+pub type FrameImage = (usize, usize, Vec<u8>);
+
+/// Longest side a frame thumbnail is shown at, in points. The thumbnail keeps
+/// the frame's aspect ratio within this.
+const THUMB_MAX: f32 = 48.;
+
+/// The animation frames: a thumbnail of each, controls to add, duplicate and
+/// delete, playback, and the onion skin toggle.
 ///
 /// Frames share the project's layers — a layer exists on every frame — so this
 /// only chooses which frame's pixels are being edited and shown.
@@ -12,7 +20,12 @@ pub struct FramesPanel {
     frame_count: usize,
     active_frame: usize,
     is_playing: bool,
+    onion_skin: bool,
     fps: f32,
+    /// A thumbnail per frame, rebuilt only when the frames' pixels change.
+    thumbnails: Vec<Picture>,
+    /// Canvas size, to keep thumbnails in the right proportion.
+    canvas_size: (usize, usize),
 }
 
 impl FramesPanel {
@@ -21,15 +34,54 @@ impl FramesPanel {
             frame_count: 1,
             active_frame: 0,
             is_playing: false,
+            onion_skin: false,
             fps: 12.0,
+            thumbnails: Vec::new(),
+            canvas_size: (1, 1),
         }
     }
 
-    pub fn sync(&mut self, frame_count: usize, active_frame: usize, is_playing: bool, fps: f32) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync(
+        &mut self,
+        frame_count: usize,
+        active_frame: usize,
+        is_playing: bool,
+        onion_skin: bool,
+        fps: f32,
+    ) {
         self.frame_count = frame_count;
         self.active_frame = active_frame;
         self.is_playing = is_playing;
+        self.onion_skin = onion_skin;
         self.fps = fps;
+    }
+
+    /// Replace the thumbnail images. Called only when the frames' pixels
+    /// change, not every frame.
+    pub fn set_thumbnails(&mut self, images: Vec<FrameImage>) {
+        if let Some((w, h, _)) = images.first() {
+            self.canvas_size = (*w, *h);
+        }
+
+        // Reuse existing `Picture`s where possible so their textures aren't all
+        // dropped when only one frame changed.
+        self.thumbnails.resize_with(images.len(), Picture::new);
+
+        for (picture, (w, h, rgba)) in self.thumbnails.iter_mut().zip(&images) {
+            picture.set(*w, *h, rgba);
+        }
+    }
+
+    /// The on-screen size of a thumbnail, keeping the canvas' aspect ratio.
+    fn thumb_size(&self) -> egui::Vec2 {
+        let (w, h) = self.canvas_size;
+        let longest = w.max(h).max(1) as f32;
+
+        egui::vec2(
+            THUMB_MAX * w as f32 / longest,
+            THUMB_MAX * h as f32 / longest,
+        )
     }
 
     pub fn update(&mut self, egui_ctx: &egui::Context, layout: &PanelLayout) -> Vec<Effect> {
@@ -92,18 +144,38 @@ impl FramesPanel {
                 });
             });
 
+            let mut onion = self.onion_skin;
+            if ui
+                .checkbox(&mut onion, "Onion skin")
+                .on_hover_text("show a faint ghost of the previous frame while drawing")
+                .changed()
+            {
+                events.push(UiEvent::ToggleOnionSkin.into());
+            }
+
             ui.separator();
 
-            // A numbered button per frame, the current one selected. Wraps so a
-            // long animation doesn't push the panel wide.
+            // A thumbnail per frame with its number, the current one framed.
+            // Wraps so a long animation doesn't push the panel wide.
+            let size = self.thumb_size();
             ui.horizontal_wrapped(|ui| {
                 for frame in 0..self.frame_count {
                     let selected = frame == self.active_frame;
+                    let clicked = ui
+                        .vertical(|ui| {
+                            let clicked = match self.thumbnails.get_mut(frame) {
+                                Some(picture) => picture.button(ui, size, selected).clicked(),
+                                // No thumbnail yet (first frame before the
+                                // images arrive): fall back to a plain button.
+                                None => ui.selectable_label(selected, "…").clicked(),
+                            };
+                            ui.label(format!("{}", frame + 1));
 
-                    if ui
-                        .selectable_label(selected, format!("{}", frame + 1))
-                        .clicked()
-                    {
+                            clicked
+                        })
+                        .inner;
+
+                    if clicked {
                         events.push(Event::SwitchFrame(frame).into());
                     }
                 }

@@ -1,47 +1,42 @@
 use crate::gui::layout::{self, PanelLayout};
-use crate::UiState;
-use lapix::{Position, Rect, Size};
+use crate::gui::picture::Picture;
+use lapix::Size;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MS_PER_FRAME: usize = 100;
+const MS_PER_FRAME: u128 = 100;
 
+/// A live preview of the drawing, at a chosen scale.
+///
+/// When the canvas is divided into a spritesheet, the preview plays through its
+/// cells, so it doubles as a look at the animation held within a single frame.
+/// It shows the composited active frame, so filters, opacity and adjustment
+/// layers are all reflected.
 pub struct Preview {
     spritesheet: Size<u8>,
     canvas_size: Size<i32>,
-    image: egui::ColorImage,
-    texture: Option<egui::TextureHandle>,
+    picture: Picture,
     scale: String,
-    layers_vis: Vec<bool>,
-    layers_alpha: Vec<u8>,
-    config: Option<(Position<f32>, Rect<f32>)>,
 }
 
 impl Preview {
     pub fn new() -> Self {
-        let bytes = [0, 0, 0, 0];
         Self {
             spritesheet: (1, 1).into(),
             canvas_size: (0, 0).into(),
-            image: egui::ColorImage::from_rgba_unmultiplied([1, 1], &bytes),
-            texture: None,
+            picture: Picture::new(),
             scale: "1".to_owned(),
-            layers_vis: Vec::new(),
-            layers_alpha: Vec::new(),
-            config: None,
         }
     }
 
-    pub fn sync(
-        &mut self,
-        spritesheet: Size<u8>,
-        canvas_size: Size<i32>,
-        layers_vis: Vec<bool>,
-        layers_alpha: Vec<u8>,
-    ) {
+    pub fn sync(&mut self, spritesheet: Size<u8>, canvas_size: Size<i32>) {
         self.spritesheet = spritesheet;
-        self.layers_vis = layers_vis;
-        self.layers_alpha = layers_alpha;
         self.canvas_size = canvas_size;
+    }
+
+    /// Replace the previewed pixels. Called only when the composited image
+    /// changes, not every frame.
+    pub fn set_image(&mut self, width: usize, height: usize, rgba: &[u8]) {
+        self.picture.set(width, height, rgba);
     }
 
     pub fn update(&mut self, egui_ctx: &egui::Context, layout: &PanelLayout) {
@@ -51,91 +46,36 @@ impl Preview {
                 ui.add(egui::widgets::TextEdit::singleline(&mut self.scale).desired_width(30.0))
                     .labelled_by(label.id);
             });
-            let scroll_area = egui::ScrollArea::new([true, true]);
-            scroll_area.show_viewport(ui, |ui, viewport| {
-                let frame_ratios = self.frame_ratios();
 
-                let tex: &egui::TextureHandle = self.texture.get_or_insert_with(|| {
-                    ui.ctx()
-                        .load_texture("", self.image.clone(), egui::TextureOptions::NEAREST)
-                });
-                let frame_size =
-                    frame_ratios * egui::vec2(self.canvas_size.x as f32, self.canvas_size.y as f32);
-                let scale = self.scale.parse().unwrap_or(1.);
+            let (nx, ny) = (self.spritesheet.x.max(1), self.spritesheet.y.max(1));
+            let cell = self.current_cell(nx, ny);
+            let cell_size = egui::vec2(
+                self.canvas_size.x as f32 / nx as f32,
+                self.canvas_size.y as f32 / ny as f32,
+            );
+            let scale = self.scale.parse().unwrap_or(1.0_f32).max(0.01);
 
-                // The image is only a sized placeholder; the real frame is
-                // painted over this rect with macroquad in `draw`.
-                let image =
-                    egui::Image::new(egui::load::SizedTexture::new(tex.id(), frame_size * scale))
-                        .bg_fill(crate::theme::PREVIEW_BG);
-                let r = ui.add(image).rect;
-
-                let r: Rect<i32> =
-                    Rect::new(r.min.x, r.min.y, r.max.x - r.min.x, r.max.y - r.min.y).into();
-                let cr = ui.clip_rect();
-                let clip: Rect<i32> =
-                    Rect::new(cr.min.x, cr.min.y, cr.max.x - cr.min.x, cr.max.y - cr.min.y).into();
-                if clip.w >= 0 && clip.h >= 0 {
-                    let r = r.clip_to(clip);
-                    let offset = Position::new(viewport.min.x, viewport.min.y);
-                    self.config = Some((offset, r.into()));
-                } else {
-                    self.config = None;
-                }
+            egui::ScrollArea::both().show(ui, |ui| {
+                self.picture.image(ui, cell_size * scale, cell);
             });
         });
     }
 
-    // TODO this method has a lot in common with graphics::draw_canvas,
-    // it would be better to unify these implementations
-    pub fn draw(&self, state: &UiState) {
-        use macroquad::prelude::*;
+    /// The texture sub-rectangle for the spritesheet cell showing now, cycled
+    /// over time so the preview animates.
+    fn current_cell(&self, nx: u8, ny: u8) -> egui::Rect {
+        let frames = nx as u128 * ny as u128;
+        let elapsed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let frame = (elapsed / MS_PER_FRAME % frames) as u8;
+        let (col, row) = (frame % nx, frame / nx);
+        let (w, h) = (1.0 / nx as f32, 1.0 / ny as f32);
 
-        if let Some((offset, rect)) = self.config {
-            let frames = self.spritesheet.x as usize * self.spritesheet.y as usize;
-            let t = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let frame = (t as usize / MS_PER_FRAME) % frames;
-            let frame_size: Size<f32> = (
-                (self.canvas_size.x as usize / self.spritesheet.x as usize) as f32,
-                (self.canvas_size.y as usize / self.spritesheet.y as usize) as f32,
-            )
-                .into();
-            let frame = Rect {
-                x: ((frame % (self.spritesheet.x as usize)) as f32) * frame_size.x,
-                y: ((frame / (self.spritesheet.x as usize)) as f32) * frame_size.y,
-                w: frame_size.x,
-                h: frame_size.y,
-            };
-            let preview_scale = self.scale.parse().unwrap_or(1.);
-            let scrollarea_frame = Rect {
-                x: frame.x + (offset.x / preview_scale),
-                y: frame.y + (offset.y / preview_scale),
-                w: rect.w / preview_scale,
-                h: rect.h / preview_scale,
-            };
-
-            // The flattened stack, so the preview shows exactly what the canvas
-            // does, filters and all.
-            let params = DrawTextureParams {
-                source: Some(scrollarea_frame),
-                dest_size: Some(Vec2 {
-                    x: rect.w,
-                    y: rect.h,
-                }),
-                ..Default::default()
-            };
-
-            draw_texture_ex(state.canvas_texture(), rect.x, rect.y, WHITE, params);
-        }
-    }
-
-    fn frame_ratios(&self) -> egui::Vec2 {
-        let nx = self.spritesheet.x;
-        let ny = self.spritesheet.y;
-
-        egui::Vec2::new(1. / nx as f32, 1. / ny as f32)
+        egui::Rect::from_min_size(
+            egui::pos2(col as f32 * w, row as f32 * h),
+            egui::vec2(w, h),
+        )
     }
 }
