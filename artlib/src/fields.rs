@@ -33,6 +33,81 @@ use std::sync::Arc;
 /// the closure, and `Send + Sync` so a generator can run one off the UI thread.
 pub type Field = Arc<dyn Fn(f64, f64) -> f64 + Send + Sync>;
 
+/// Coordinate fields and scalar-field arithmetic. Shapes are scalar fields in
+/// artlib, so these combinators provide a safe, serializable-front-end-friendly
+/// replacement for Python callables without embedding another language in a
+/// node graph.
+pub fn x() -> Field {
+    Arc::new(|x, _| x)
+}
+pub fn y() -> Field {
+    Arc::new(|_, y| y)
+}
+pub fn constant(value: f64) -> Field {
+    Arc::new(move |_, _| value)
+}
+pub fn add(a: Field, b: Field) -> Field {
+    Arc::new(move |x, y| a(x, y) + b(x, y))
+}
+pub fn difference(a: Field, b: Field) -> Field {
+    Arc::new(move |x, y| a(x, y) - b(x, y))
+}
+pub fn multiply(a: Field, b: Field) -> Field {
+    Arc::new(move |x, y| a(x, y) * b(x, y))
+}
+pub fn divide(a: Field, b: Field) -> Field {
+    Arc::new(move |x, y| a(x, y) / b(x, y))
+}
+pub fn minimum(a: Field, b: Field) -> Field {
+    Arc::new(move |x, y| a(x, y).min(b(x, y)))
+}
+pub fn maximum(a: Field, b: Field) -> Field {
+    Arc::new(move |x, y| a(x, y).max(b(x, y)))
+}
+pub fn absolute(a: Field) -> Field {
+    Arc::new(move |x, y| a(x, y).abs())
+}
+pub fn sine(a: Field) -> Field {
+    Arc::new(move |x, y| a(x, y).sin())
+}
+pub fn power(a: Field, exponent: f64) -> Field {
+    Arc::new(move |x, y| a(x, y).powf(exponent))
+}
+pub fn clamp(a: Field, lo: f64, hi: f64) -> Field {
+    Arc::new(move |x, y| a(x, y).clamp(lo, hi))
+}
+pub fn hypot(a: Field, b: Field) -> Field {
+    Arc::new(move |x, y| a(x, y).hypot(b(x, y)))
+}
+pub fn smoothstep(a: Field, edge0: f64, edge1: f64) -> Field {
+    Arc::new(move |x, y| {
+        let t = ((a(x, y) - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    })
+}
+pub fn select(condition: Field, if_true: Field, if_false: Field) -> Field {
+    Arc::new(move |x, y| {
+        if condition(x, y) <= 0.0 {
+            if_true(x, y)
+        } else {
+            if_false(x, y)
+        }
+    })
+}
+
+/// The area below a sampled height line. Samples wrap horizontally, making the
+/// result suitable for reusable horizon strips and other serialized profiles.
+pub fn height_profile(values: Vec<f64>, crest: f64, foot: f64) -> Field {
+    Arc::new(move |x, y| {
+        if values.is_empty() {
+            return 1.0;
+        }
+        let index = (x as i64).rem_euclid(values.len() as i64) as usize;
+        let top = crest + (1.0 - values[index]) * (foot - crest);
+        top - y
+    })
+}
+
 pub const SQRT2: f64 = std::f64::consts::SQRT_2;
 pub const SQRT3: f64 = 1.732_050_807_568_877_2;
 

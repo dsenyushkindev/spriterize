@@ -148,6 +148,58 @@ impl Grid {
         )
     }
 
+    /// Element-wise addition. Kept as a named operation as well as an operator
+    /// so front-ends do not need to take ownership of either input.
+    pub fn add(&self, other: &Grid) -> Grid {
+        assert_eq!(self.size, other.size, "grid add needs matching sizes");
+        Grid::from_vec(
+            self.size,
+            self.v.iter().zip(&other.v).map(|(a, b)| a + b).collect(),
+        )
+    }
+
+    /// Element-wise subtraction.
+    pub fn sub(&self, other: &Grid) -> Grid {
+        assert_eq!(self.size, other.size, "grid sub needs matching sizes");
+        Grid::from_vec(
+            self.size,
+            self.v.iter().zip(&other.v).map(|(a, b)| a - b).collect(),
+        )
+    }
+
+    /// Element-wise multiplication, matching Python Grid * Grid.
+    pub fn multiply(&self, other: &Grid) -> Grid {
+        assert_eq!(self.size, other.size, "grid multiply needs matching sizes");
+        Grid::from_vec(
+            self.size,
+            self.v.iter().zip(&other.v).map(|(a, b)| a * b).collect(),
+        )
+    }
+
+    /// Multiply every sample by a scalar.
+    pub fn scale_values(&self, factor: f64) -> Grid {
+        Grid::from_vec(self.size, self.v.iter().map(|x| x * factor).collect())
+    }
+
+    pub fn offset(&self, amount: f64) -> Grid {
+        Grid::from_vec(self.size, self.v.iter().map(|x| x + amount).collect())
+    }
+
+    pub fn lerp_value(&self, value: f64, t: f64) -> Grid {
+        Grid::from_vec(
+            self.size,
+            self.v.iter().map(|x| x + (value - x) * t).collect(),
+        )
+    }
+
+    pub fn negate(&self) -> Grid {
+        self.scale_values(-1.0)
+    }
+
+    pub fn abs(&self) -> Grid {
+        Grid::from_vec(self.size, self.v.iter().map(|x| x.abs()).collect())
+    }
+
     // -- frequency ---------------------------------------------------------
 
     /// Box blur, separable and WRAPPED. On its own it softens; its real use is
@@ -266,6 +318,41 @@ impl std::ops::Mul<f64> for Grid {
     type Output = Grid;
     fn mul(self, rhs: f64) -> Grid {
         Grid::from_vec(self.size, self.v.iter().map(|x| x * rhs).collect())
+    }
+}
+
+impl std::ops::Add<f64> for Grid {
+    type Output = Grid;
+    fn add(self, rhs: f64) -> Grid {
+        self.offset(rhs)
+    }
+}
+
+impl std::ops::Sub<f64> for Grid {
+    type Output = Grid;
+    fn sub(self, rhs: f64) -> Grid {
+        self.offset(-rhs)
+    }
+}
+
+impl std::ops::Mul<Grid> for Grid {
+    type Output = Grid;
+    fn mul(self, rhs: Grid) -> Grid {
+        self.multiply(&rhs)
+    }
+}
+
+impl std::ops::Sub<Grid> for Grid {
+    type Output = Grid;
+    fn sub(self, rhs: Grid) -> Grid {
+        Grid::sub(&self, &rhs)
+    }
+}
+
+impl std::ops::Neg for Grid {
+    type Output = Grid;
+    fn neg(self) -> Grid {
+        self.negate()
     }
 }
 

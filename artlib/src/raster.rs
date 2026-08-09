@@ -94,6 +94,48 @@ pub fn radial(cx: f64, cy: f64, r: f64, inner: Rgba, outer: Rgba) -> Shader {
     Arc::new(move |x, y| mix(inner, outer, (x - cx).hypot(y - cy) / denom))
 }
 
+/// A radial ramp measured in ellipse-space. This is the stretched equivalent
+/// of [`radial`], with an even falloff along both axes.
+pub fn elliptical(cx: f64, cy: f64, rx: f64, ry: f64, inner: Rgba, outer: Rgba) -> Shader {
+    Arc::new(move |x, y| {
+        let t = ((x - cx) / rx).hypot((y - cy) / ry);
+        mix(inner, outer, t)
+    })
+}
+
+/// Use a scalar field as the alpha channel of a constant RGB colour.
+/// Values are clamped and rounded to the nearest byte, matching the authored
+/// alpha-field shaders in the Python asset generators.
+pub fn alpha_field(field: Field, color: Rgba, lo: f64, hi: f64) -> Shader {
+    Arc::new(move |x, y| {
+        let mut out = [
+            color[0] as f64,
+            color[1] as f64,
+            color[2] as f64,
+            color[3] as f64,
+        ];
+        let t = if hi == lo {
+            0.0
+        } else {
+            ((field(x, y) - lo) / (hi - lo)).clamp(0.0, 1.0)
+        };
+        out[3] = (t * 255.0 + 0.5).trunc();
+        if out[3] == 0.0 {
+            out = [0.0; 4];
+        }
+        out
+    })
+}
+
+/// Build an arbitrary shader from four scalar fields whose values are channel
+/// intensities in `0..255`. This is the composable equivalent of supplying a
+/// Python callable returning an RGBA array.
+pub fn from_channels(red: Field, green: Field, blue: Field, alpha: Field) -> Shader {
+    Arc::new(move |x, y| {
+        [red(x, y), green(x, y), blue(x, y), alpha(x, y)].map(|v| v.clamp(0.0, 255.0))
+    })
+}
+
 /// Colour by the VALUE of a field — how a noise grid becomes rock.
 pub fn from_field(field: Field, low: Rgba, high: Rgba, lo: f64, hi: f64) -> Shader {
     let span = if hi - lo == 0.0 { 1.0 } else { hi - lo };
@@ -133,6 +175,15 @@ impl Canvas {
     /// A square canvas, transparent.
     pub fn square(size: usize) -> Self {
         Self::new(size, size, CLEAR)
+    }
+
+    pub fn pixel(&self, x: usize, y: usize) -> [f64; 4] {
+        self.px[y * self.w + x]
+    }
+
+    pub fn set_pixel(&mut self, x: usize, y: usize, color: Rgba) -> &mut Self {
+        self.px[y * self.w + x] = color.map(|channel| channel as f64);
+        self
     }
 
     fn coverage(&self, field: &Field, x: f64, y: f64, aa: bool) -> f64 {

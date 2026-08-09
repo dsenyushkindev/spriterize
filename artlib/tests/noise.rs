@@ -109,6 +109,12 @@ fn grid_arithmetic_matches_elementwise() {
         .iter()
         .all(|&v| (v - 0.7).abs() < 1e-12));
     assert!((a * 3.0).v.iter().all(|&v| (v - 0.6).abs() < 1e-12));
+
+    let a = constant(4, -0.2);
+    let b = constant(4, 0.5);
+    assert!(a.multiply(&b).v.iter().all(|&v| (v + 0.1).abs() < 1e-12));
+    assert!(a.abs().v.iter().all(|&v| (v - 0.2).abs() < 1e-12));
+    assert!(b.offset(0.25).v.iter().all(|&v| (v - 0.75).abs() < 1e-12));
 }
 
 #[test]

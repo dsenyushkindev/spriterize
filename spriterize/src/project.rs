@@ -14,7 +14,8 @@ use std::path::PathBuf;
 /// - `..0xf1`: before layers held a cel per frame.
 /// - `..0xf2`: before layers could carry a procedural generator recipe.
 /// - `..0xf3`: before generator definitions could be scripts or node graphs.
-const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xf4];
+/// - `..0xf4`: before graphs exposed the complete artlib field/texture/raster vocabulary.
+const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xf5];
 
 pub fn save(path: PathBuf, bytes: Vec<u8>) {
     use std::io::Write;

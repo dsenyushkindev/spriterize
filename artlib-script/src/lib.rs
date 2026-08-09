@@ -26,6 +26,12 @@
 //! plus Rune's own pure default modules (arithmetic, `let`, arrays, tuples). No
 //! file, network or process capability is ever registered — those live in the
 //! separate `rune-modules` crate, which is not a dependency.
+//!
+//! Python generators that used a NumPy callable can build the same result from
+//! `field_x`, `field_y`, the `field_*` arithmetic functions, `height_profile`,
+//! `alpha_field`, and `shader_rgba`. Those operations are deliberately shared
+//! with the visual graph vocabulary, so custom procedural fields do not make a
+//! script-only island.
 
 use rune::{Any, Context, Diagnostics, Module, Source, Sources, Vm};
 use std::collections::HashMap;
@@ -109,6 +115,28 @@ fn rgba(r: i64, g: i64, b: i64, a: i64) -> i64 {
 #[rune::function]
 fn shade(color: i64, factor: f64) -> i64 {
     pack(artlib::raster::shade(unpack(color), factor))
+}
+
+/// Replace a colour's alpha channel.
+#[rune::function]
+fn alpha(color: i64, value: i64) -> i64 {
+    pack(artlib::raster::alpha(
+        unpack(color),
+        value.clamp(0, 255) as u8,
+    ))
+}
+
+/// Interpolate two colours. Channels are truncated at the packed-colour
+/// boundary, which is where the rasterizer would quantize them as well.
+#[rune::function]
+fn mix(a: i64, b: i64, t: f64) -> i64 {
+    let mixed = artlib::raster::mix(unpack(a), unpack(b), t);
+    pack([
+        mixed[0].clamp(0.0, 255.0) as u8,
+        mixed[1].clamp(0.0, 255.0) as u8,
+        mixed[2].clamp(0.0, 255.0) as u8,
+        mixed[3].clamp(0.0, 255.0) as u8,
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +282,81 @@ fn polar_array(field: &Field, count: i64, cx: f64, cy: f64, phase: f64) -> Field
     ))
 }
 
+// Scalar-field construction. These operations cover custom Python/Numpy
+// callables while keeping Rune scripts sandboxed and graph-compatible.
+#[rune::function]
+fn field_x() -> Field {
+    Field::wrap(artlib::fields::x())
+}
+#[rune::function]
+fn field_y() -> Field {
+    Field::wrap(artlib::fields::y())
+}
+#[rune::function]
+fn field_constant(value: f64) -> Field {
+    Field::wrap(artlib::fields::constant(value))
+}
+#[rune::function]
+fn field_add(a: &Field, b: &Field) -> Field {
+    Field::wrap(artlib::fields::add(a.inner.clone(), b.inner.clone()))
+}
+#[rune::function]
+fn field_sub(a: &Field, b: &Field) -> Field {
+    Field::wrap(artlib::fields::difference(a.inner.clone(), b.inner.clone()))
+}
+#[rune::function]
+fn field_mul(a: &Field, b: &Field) -> Field {
+    Field::wrap(artlib::fields::multiply(a.inner.clone(), b.inner.clone()))
+}
+#[rune::function]
+fn field_div(a: &Field, b: &Field) -> Field {
+    Field::wrap(artlib::fields::divide(a.inner.clone(), b.inner.clone()))
+}
+#[rune::function]
+fn field_min(a: &Field, b: &Field) -> Field {
+    Field::wrap(artlib::fields::minimum(a.inner.clone(), b.inner.clone()))
+}
+#[rune::function]
+fn field_max(a: &Field, b: &Field) -> Field {
+    Field::wrap(artlib::fields::maximum(a.inner.clone(), b.inner.clone()))
+}
+#[rune::function]
+fn field_abs(a: &Field) -> Field {
+    Field::wrap(artlib::fields::absolute(a.inner.clone()))
+}
+#[rune::function]
+fn field_sin(a: &Field) -> Field {
+    Field::wrap(artlib::fields::sine(a.inner.clone()))
+}
+#[rune::function]
+fn field_pow(a: &Field, exponent: f64) -> Field {
+    Field::wrap(artlib::fields::power(a.inner.clone(), exponent))
+}
+#[rune::function]
+fn field_clamp(a: &Field, lo: f64, hi: f64) -> Field {
+    Field::wrap(artlib::fields::clamp(a.inner.clone(), lo, hi))
+}
+#[rune::function]
+fn field_hypot(a: &Field, b: &Field) -> Field {
+    Field::wrap(artlib::fields::hypot(a.inner.clone(), b.inner.clone()))
+}
+#[rune::function]
+fn field_smoothstep(a: &Field, edge0: f64, edge1: f64) -> Field {
+    Field::wrap(artlib::fields::smoothstep(a.inner.clone(), edge0, edge1))
+}
+#[rune::function]
+fn field_select(condition: &Field, if_true: &Field, if_false: &Field) -> Field {
+    Field::wrap(artlib::fields::select(
+        condition.inner.clone(),
+        if_true.inner.clone(),
+        if_false.inner.clone(),
+    ))
+}
+#[rune::function]
+fn height_profile(values: Vec<f64>, crest: f64, foot: f64) -> Field {
+    Field::wrap(artlib::fields::height_profile(values, crest, foot))
+}
+
 // ---------------------------------------------------------------------------
 // Texture: noise sources (returning grids) and grid operations.
 // ---------------------------------------------------------------------------
@@ -298,6 +401,31 @@ fn worley_cracks(size: i64, period: i64, seed: i64) -> Grid {
     ))
 }
 
+/// Fully configurable cellular noise (`feature`: "f1", "f2", or "f2f1").
+#[rune::function]
+fn worley_with(size: i64, period: i64, seed: i64, feature: &str, jitter: f64) -> Grid {
+    let feature = match feature {
+        "f2" => artlib::texture::Feature::F2,
+        "f2f1" => artlib::texture::Feature::F2F1,
+        _ => artlib::texture::Feature::F1,
+    };
+    Grid::wrap(artlib::texture::worley_with(
+        size as usize,
+        period.max(1) as usize,
+        seed as u64,
+        feature,
+        jitter,
+    ))
+}
+
+fn noise_source(name: &str) -> artlib::texture::NoiseSource {
+    match name {
+        "value" | "value_noise" => artlib::texture::value_noise,
+        "worley" => artlib::texture::worley,
+        _ => artlib::texture::perlin,
+    }
+}
+
 /// Layered gradient noise: form, then grain on it.
 #[rune::function]
 fn fbm(size: i64, seed: i64, octaves: i64, period: i64) -> Grid {
@@ -311,6 +439,32 @@ fn fbm(size: i64, seed: i64, octaves: i64, period: i64) -> Grid {
     ))
 }
 
+fn fbm_source(size: i64, seed: i64, octaves: i64, period: i64, source: &str, falloff: f64) -> Grid {
+    Grid::wrap(artlib::texture::fbm(
+        size as usize,
+        seed as u64,
+        octaves.max(0) as u32,
+        period.max(1) as usize,
+        noise_source(source),
+        falloff,
+    ))
+}
+
+#[rune::function]
+fn fbm_perlin(size: i64, seed: i64, octaves: i64, period: i64, falloff: f64) -> Grid {
+    fbm_source(size, seed, octaves, period, "perlin", falloff)
+}
+
+#[rune::function]
+fn fbm_value(size: i64, seed: i64, octaves: i64, period: i64, falloff: f64) -> Grid {
+    fbm_source(size, seed, octaves, period, "value", falloff)
+}
+
+#[rune::function]
+fn fbm_worley(size: i64, seed: i64, octaves: i64, period: i64, falloff: f64) -> Grid {
+    fbm_source(size, seed, octaves, period, "worley", falloff)
+}
+
 /// Folded noise: creases instead of blobs — veins, ridges, fracture lines.
 #[rune::function]
 fn ridged(size: i64, seed: i64, octaves: i64, period: i64) -> Grid {
@@ -320,6 +474,17 @@ fn ridged(size: i64, seed: i64, octaves: i64, period: i64) -> Grid {
         octaves as u32,
         period as usize,
         artlib::texture::perlin,
+    ))
+}
+
+#[rune::function]
+fn ridged_with(size: i64, seed: i64, octaves: i64, period: i64, source: &str) -> Grid {
+    Grid::wrap(artlib::texture::ridged(
+        size as usize,
+        seed as u64,
+        octaves.max(0) as u32,
+        period.max(1) as usize,
+        noise_source(source),
     ))
 }
 
@@ -417,14 +582,39 @@ impl Grid {
 
     #[rune::function]
     fn sub(&self, other: &Grid) -> Grid {
-        // a - b, elementwise, via a + (b * -1).
-        Grid::wrap(self.inner.clone() + (other.inner.clone() * -1.0))
+        Grid::wrap(self.inner.sub(&other.inner))
     }
 
     /// Multiply every value by a scalar.
     #[rune::function]
     fn mul(&self, scalar: f64) -> Grid {
-        Grid::wrap(self.inner.clone() * scalar)
+        Grid::wrap(self.inner.scale_values(scalar))
+    }
+
+    #[rune::function]
+    fn offset(&self, amount: f64) -> Grid {
+        Grid::wrap(self.inner.offset(amount))
+    }
+
+    #[rune::function]
+    fn lerp_value(&self, value: f64, amount: f64) -> Grid {
+        Grid::wrap(self.inner.lerp_value(value, amount))
+    }
+
+    /// Element-wise multiplication.
+    #[rune::function]
+    fn multiply(&self, other: &Grid) -> Grid {
+        Grid::wrap(self.inner.multiply(&other.inner))
+    }
+
+    #[rune::function]
+    fn negate(&self) -> Grid {
+        Grid::wrap(self.inner.negate())
+    }
+
+    #[rune::function]
+    fn abs(&self) -> Grid {
+        Grid::wrap(self.inner.abs())
     }
 }
 
@@ -471,6 +661,26 @@ fn radial(cx: f64, cy: f64, r: f64, inner: i64, outer: i64) -> Shader {
     ))
 }
 
+#[rune::function]
+fn alpha_field(field: &Field, color: i64, lo: f64, hi: f64) -> Shader {
+    Shader::wrap(artlib::raster::alpha_field(
+        field.inner.clone(),
+        unpack(color),
+        lo,
+        hi,
+    ))
+}
+
+#[rune::function]
+fn shader_rgba(red: &Field, green: &Field, blue: &Field, alpha: &Field) -> Shader {
+    Shader::wrap(artlib::raster::from_channels(
+        red.inner.clone(),
+        green.inner.clone(),
+        blue.inner.clone(),
+        alpha.inner.clone(),
+    ))
+}
+
 /// Colour by the value of a field over the range `lo..hi`.
 #[rune::function]
 fn from_field(field: &Field, low: i64, high: i64, lo: f64, hi: f64) -> Shader {
@@ -508,6 +718,14 @@ impl Canvas {
         }
     }
 
+    /// A canvas initialized to a colour, matching Python Canvas(..., fill=...).
+    #[rune::function(path = Self::filled)]
+    fn filled(w: i64, h: i64, color: i64) -> Canvas {
+        Canvas {
+            inner: artlib::raster::Canvas::new(w as usize, h as usize, unpack(color)),
+        }
+    }
+
     /// Composite a shape through a shader, source-over, antialiased.
     #[rune::function]
     fn paint(&mut self, field: &Field, shader: &Shader) {
@@ -530,6 +748,11 @@ impl Canvas {
     #[rune::function]
     fn stamp(&mut self, field: &Field, shader: &Shader) {
         self.inner.stamp(&field.inner, &shader.inner, false);
+    }
+
+    #[rune::function]
+    fn stamp_aa(&mut self, field: &Field, shader: &Shader) {
+        self.inner.stamp(&field.inner, &shader.inner, true);
     }
 
     /// Paint every pixel through a shader.
@@ -719,6 +942,8 @@ fn artlib_module() -> Result<Module, rune::ContextError> {
     m.function_meta(rgb)?;
     m.function_meta(rgba)?;
     m.function_meta(shade)?;
+    m.function_meta(alpha)?;
+    m.function_meta(mix)?;
 
     // primitives
     m.function_meta(disk)?;
@@ -747,14 +972,36 @@ fn artlib_module() -> Result<Module, rune::ContextError> {
     m.function_meta(scale)?;
     m.function_meta(mirror4)?;
     m.function_meta(polar_array)?;
+    m.function_meta(field_x)?;
+    m.function_meta(field_y)?;
+    m.function_meta(field_constant)?;
+    m.function_meta(field_add)?;
+    m.function_meta(field_sub)?;
+    m.function_meta(field_mul)?;
+    m.function_meta(field_div)?;
+    m.function_meta(field_min)?;
+    m.function_meta(field_max)?;
+    m.function_meta(field_abs)?;
+    m.function_meta(field_sin)?;
+    m.function_meta(field_pow)?;
+    m.function_meta(field_clamp)?;
+    m.function_meta(field_hypot)?;
+    m.function_meta(field_smoothstep)?;
+    m.function_meta(field_select)?;
+    m.function_meta(height_profile)?;
 
     // texture
     m.function_meta(value_noise)?;
     m.function_meta(perlin)?;
     m.function_meta(worley)?;
     m.function_meta(worley_cracks)?;
+    m.function_meta(worley_with)?;
     m.function_meta(fbm)?;
+    m.function_meta(fbm_perlin)?;
+    m.function_meta(fbm_value)?;
+    m.function_meta(fbm_worley)?;
     m.function_meta(ridged)?;
+    m.function_meta(ridged_with)?;
     m.function_meta(stripes)?;
     m.function_meta(constant)?;
     m.function_meta(Grid::field)?;
@@ -772,21 +1019,30 @@ fn artlib_module() -> Result<Module, rune::ContextError> {
     m.function_meta(Grid::add)?;
     m.function_meta(Grid::sub)?;
     m.function_meta(Grid::mul)?;
+    m.function_meta(Grid::offset)?;
+    m.function_meta(Grid::lerp_value)?;
+    m.function_meta(Grid::multiply)?;
+    m.function_meta(Grid::negate)?;
+    m.function_meta(Grid::abs)?;
 
     // shaders
     m.function_meta(solid)?;
     m.function_meta(vertical)?;
     m.function_meta(horizontal)?;
     m.function_meta(radial)?;
+    m.function_meta(alpha_field)?;
+    m.function_meta(shader_rgba)?;
     m.function_meta(from_field)?;
     m.function_meta(from_grid)?;
 
     // canvas
     m.function_meta(Canvas::new)?;
+    m.function_meta(Canvas::filled)?;
     m.function_meta(Canvas::paint)?;
     m.function_meta(Canvas::paint_opacity)?;
     m.function_meta(Canvas::paint_hard)?;
     m.function_meta(Canvas::stamp)?;
+    m.function_meta(Canvas::stamp_aa)?;
     m.function_meta(Canvas::fill)?;
     m.function_meta(Canvas::modulate)?;
     m.function_meta(Canvas::modulate_in)?;
@@ -921,6 +1177,28 @@ mod tests {
             }
         "#;
         assert!(run_script(src, 64, 64).is_ok());
+    }
+
+    #[test]
+    fn composable_fields_replace_custom_pixel_callables() {
+        let src = r#"
+            pub fn main(w, h, p) {
+                let c = Canvas::new(w, h);
+                let dx = field_sub(field_x(), field_constant(8.0));
+                let dy = field_sub(field_y(), field_constant(8.0));
+                let distance = field_hypot(dx, dy);
+                let alpha = field_mul(
+                    field_clamp(field_sub(field_constant(8.0), distance), 0.0, 8.0),
+                    field_constant(31.875)
+                );
+                let white = field_constant(255.0);
+                c.stamp(everywhere(), shader_rgba(white, white, white, alpha));
+                c
+            }
+        "#;
+        let px = run_script(src, 16, 16).unwrap();
+        assert_eq!(pixel(&px, 16, 8, 8), [255, 255, 255, 255]);
+        assert_eq!(pixel(&px, 16, 0, 0), [255, 255, 255, 0]);
     }
 
     #[test]

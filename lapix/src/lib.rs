@@ -31,7 +31,7 @@ pub use filter::Filter;
 pub use floating::FreeImage;
 pub use generator::{
     GenValue, Generator, GeneratorDefinition, GeneratorGraph, GeneratorGraphNode,
-    GeneratorGraphWire, GeneratorNode,
+    GeneratorGraphWire, GeneratorNode, GeneratorNoiseSource, GeneratorWorleyFeature,
 };
 pub use layer::{Layer, Layers, Rendered};
 use palette::Palette;
