@@ -1,0 +1,14 @@
+[package]
+name = "artlib-script"
+version = "0.1.0"
+edition = "2021"
+description = "A small sandboxed text DSL over artlib, on the Rune language"
+license = "MIT/Apache-2.0"
+
+[dependencies]
+artlib = { path = "../artlib" }
+rune = "0.14.2"
+
+[dev-dependencies]
+# Only the parity test decodes the golden PNGs the Python reference emits.
+image = "0.24.5"

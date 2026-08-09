@@ -12,7 +12,8 @@ use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
 use lapix::primitives::*;
 use lapix::{
-    Canvas, CanvasEffect, Event, ExportOptions, LoadProject, SaveProject, Selection, State, Tool,
+    Bitmap, Canvas, CanvasEffect, Event, ExportOptions, LoadProject, SaveProject, Selection, State,
+    Tool,
 };
 use macroquad::prelude::Color as MqColor;
 use macroquad::prelude::{FilterMode, Texture2D};
@@ -91,6 +92,14 @@ pub enum UiEvent {
     ToggleOnionSkin,
     SetUiScale(f32),
     OpenSettings,
+    OpenGenerator,
+    /// Drop a generated image (RGBA8, `width * height` pixels) into the active
+    /// layer's active cel, as one undoable step.
+    SetGeneratedImage {
+        width: usize,
+        height: usize,
+        pixels: Vec<u8>,
+    },
     ResetLayout,
     MoveCamera(Direction),
     MoveCameraExact(Point<i32>),
@@ -728,7 +737,18 @@ impl UiState {
 
     pub fn execute(&mut self, event: Event) -> Result<()> {
         let effect = self.inner.execute(event)?;
+        self.apply_canvas_effect(effect);
 
+        Ok(())
+    }
+
+    /// React to the [`CanvasEffect`] the core returns: re-upload or rebuild the
+    /// canvas texture and refresh the frames as needed. Shared by [`execute`]
+    /// and by anything that mutates the core outside an [`Event`] — the
+    /// generator, which drops in a whole cel image.
+    ///
+    /// [`execute`]: Self::execute
+    fn apply_canvas_effect(&mut self, effect: CanvasEffect) {
         match effect {
             // TODO: Texture2D is copy, so we don't need `drawing_mut` here, but
             // it would be better.
@@ -748,9 +768,7 @@ impl UiState {
                 self.mark_frames_changed();
             }
             CanvasEffect::None => (),
-        };
-
-        Ok(())
+        }
     }
 
     /// Note that the frames' pixels changed, so the thumbnails and the onion
@@ -891,6 +909,16 @@ impl UiState {
             UiEvent::SetPlaybackFps(fps) => self.playback.set_fps(fps),
             UiEvent::ToggleOnionSkin => self.onion_skin = !self.onion_skin,
             UiEvent::OpenSettings => self.gui.open_settings(),
+            UiEvent::OpenGenerator => self.gui.open_generator(),
+            UiEvent::SetGeneratedImage {
+                width,
+                height,
+                pixels,
+            } => {
+                let img = WrappedImage::from_parts(Size::new(width as i32, height as i32), &pixels);
+                let effect = self.inner.set_active_cel_image(img)?;
+                self.apply_canvas_effect(effect);
+            }
             UiEvent::ResetLayout => self.gui.reset_layout(),
             UiEvent::MoveCamera(dir) => self.move_camera(dir),
             UiEvent::MoveCameraExact(p) => self.move_camera_exact(p),

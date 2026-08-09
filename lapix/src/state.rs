@@ -607,6 +607,28 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         self.layers.active_canvas()
     }
 
+    /// Replace the active layer's active-frame pixels with `img`, undoably.
+    ///
+    /// The drawing tools build their edits pixel by pixel; this is the way to
+    /// drop in a whole image produced elsewhere — a procedural generator's
+    /// output, say — as one reversible step. `img` is expected to match the
+    /// canvas size.
+    ///
+    /// Returns [`CanvasEffect::Layer`] so the caller rebuilds the layer's
+    /// texture, exactly as for any edit that replaces a cel wholesale. Undo is a
+    /// single self-inverse [`SetLayerCanvas`](crate::AtomicAction) that restores
+    /// the previous image.
+    pub fn set_active_cel_image(&mut self, img: IMG) -> Result<CanvasEffect> {
+        let (layer, frame) = (self.layers.active_index(), self.layers.active_frame());
+        let old = self.layers.set_cel_img(layer, frame, img);
+        let reversal = AtomicAction::SetLayerCanvas(layer, frame, old);
+        self.start_action();
+        self.add_to_action(vec![reversal])?;
+        self.end_action();
+
+        Ok(CanvasEffect::Layer)
+    }
+
     /// Get a reference to the collection of [`Layers`]
     pub fn layers(&self) -> &Layers<IMG> {
         &self.layers

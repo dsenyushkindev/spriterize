@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 mod export;
 mod frames;
+mod generator;
 mod layers;
 mod layout;
 mod menu;
@@ -18,6 +19,7 @@ mod toolbar;
 
 pub use frames::FrameImage;
 use frames::FramesPanel;
+use generator::GeneratorWindow;
 use layers::LayersPanel;
 use layout::PanelLayout;
 use menu::MenuBar;
@@ -76,6 +78,7 @@ pub struct Gui {
     status_bar: StatusBar,
     menu: MenuBar,
     settings_window: SettingsWindow,
+    generator_window: GeneratorWindow,
     layout: PanelLayout,
     mouse_on_canvas: bool,
     selected_tool: Tool,
@@ -97,6 +100,7 @@ impl Gui {
             status_bar: StatusBar::new(),
             menu: MenuBar::new(),
             settings_window: SettingsWindow::new(),
+            generator_window: GeneratorWindow::new(),
             layout: PanelLayout::new(),
             mouse_on_canvas: false,
             selected_tool: Tool::Brush,
@@ -124,6 +128,10 @@ impl Gui {
 
     pub fn open_settings(&mut self) {
         self.settings_window.open();
+    }
+
+    pub fn open_generator(&mut self) {
+        self.generator_window.open();
     }
 
     pub fn reset_layout(&mut self) {
@@ -162,6 +170,7 @@ impl Gui {
         self.ui_scale = params.ui_scale;
         self.settings_window
             .sync(params.settings.clone(), params.dpi_scale);
+        self.generator_window.sync(params.canvas_size);
         self.palette.sync(params.palette.clone(), params.main_color);
         self.menu.sync(
             params.canvas_size,
@@ -215,6 +224,9 @@ impl Gui {
 
             let mut settings_events = self.settings_window.update(egui_ctx);
             events.append(&mut settings_events);
+
+            let mut generator_events = self.generator_window.update(egui_ctx);
+            events.append(&mut generator_events);
 
             let mut canvas_panel_events = self.update_canvas_panel(egui_ctx);
             events.append(&mut canvas_panel_events);

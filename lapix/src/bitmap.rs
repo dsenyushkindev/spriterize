@@ -135,7 +135,26 @@ mod test {
             &self.bytes
         }
         fn from_parts(size: Size<i32>, bytes: &[u8]) -> Self {
-            todo!()
+            let (w, h) = (size.x as usize, size.y as usize);
+            let pixels = (0..h)
+                .map(|y| {
+                    (0..w)
+                        .map(|x| {
+                            let i = (y * w + x) * 4;
+                            Color::new(bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3])
+                        })
+                        .collect()
+                })
+                .collect();
+
+            let mut img = Self {
+                size,
+                pixels,
+                bytes: Vec::new(),
+            };
+            img.update_bytes();
+
+            img
         }
         fn set_from(&mut self, other: &Self) {
             self.pixels = other.pixels.clone();

@@ -1372,6 +1372,32 @@ fn layers_can_be_renamed() {
 
 #[cfg(feature = "test-utils")]
 #[test]
+fn set_active_cel_image_replaces_pixels_undoably() {
+    use lapix::Bitmap;
+
+    let side = 4;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+
+    // A generator-style whole-image drop-in: every pixel red.
+    let red = Color::new(255, 0, 0, 255);
+    let bytes: Vec<u8> = (0..side * side).flat_map(|_| [255, 0, 0, 255]).collect();
+    let img = TestImage::from_parts(Size::new(side, side), &bytes);
+
+    state.set_active_cel_image(img).unwrap();
+    assert_eq!(state.canvas().pixel(Point::new(2, 2)), red);
+
+    // A single reversible step: undo restores the blank canvas, redo brings the
+    // image back.
+    assert!(state.can_undo());
+    state.execute(Event::Undo).unwrap();
+    assert_eq!(state.canvas().pixel(Point::new(2, 2)), TRANSPARENT);
+
+    state.execute(Event::Redo).unwrap();
+    assert_eq!(state.canvas().pixel(Point::new(2, 2)), red);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
 fn bucket_then_erase() {
     let side = 10;
     let mut state = State::<TestImage>::new(Size::new(side, side), None, None);

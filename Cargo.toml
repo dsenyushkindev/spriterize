@@ -3,6 +3,7 @@ members = [
   "spriterize",
   "lapix",
   "artlib",
+  "artlib-script",
 ]
 
 [profile.release]
