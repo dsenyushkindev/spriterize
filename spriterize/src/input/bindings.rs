@@ -170,6 +170,10 @@ impl KeyBindings {
                 InputEvent::KeyPress(mq::KeyCode::Comma.into()).into(),
                 UiEvent::PreviousFrame.into(),
             ),
+            (
+                InputEvent::KeyPress(mq::KeyCode::Enter.into()).into(),
+                UiEvent::TogglePlayback.into(),
+            ),
             // FLIP
             (
                 InputEvent::KeyPress(mq::KeyCode::H.into()).into(),

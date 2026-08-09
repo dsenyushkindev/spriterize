@@ -37,6 +37,8 @@ pub struct GuiSyncParams {
     pub layers_adjustment: Vec<bool>,
     pub frame_count: usize,
     pub active_frame: usize,
+    pub is_playing: bool,
+    pub playback_fps: f32,
     pub filters_enabled: bool,
     pub palette: Vec<[u8; 4]>,
     pub mouse_canvas: Position<i32>,
@@ -134,8 +136,12 @@ impl Gui {
             params.layers_adjustment.clone(),
             params.filters_enabled,
         );
-        self.frames_panel
-            .sync(params.frame_count, params.active_frame);
+        self.frames_panel.sync(
+            params.frame_count,
+            params.active_frame,
+            params.is_playing,
+            params.playback_fps,
+        );
         self.preview.sync(
             params.spritesheet,
             params.canvas_size,

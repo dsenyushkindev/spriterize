@@ -7,6 +7,7 @@ mod graphics;
 mod gui;
 mod input;
 mod mouse;
+mod playback;
 mod project;
 mod resource;
 mod settings;

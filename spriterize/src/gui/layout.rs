@@ -43,7 +43,7 @@ fn fallback_size(title: &str) -> (f32, f32) {
         PALETTE => (290., 430.),
         TOOLBOX => (200., 95.),
         LAYERS => (240., 115.),
-        FRAMES => (240., 80.),
+        FRAMES => (240., 130.),
         _ => (200., 200.),
     }
 }

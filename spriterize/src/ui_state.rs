@@ -5,6 +5,7 @@ use crate::gui::{Gui, GuiSyncParams};
 use crate::input::bindings::KeyBindings;
 use crate::input::manager::InputManager;
 use crate::mouse::{CursorType, MouseManager};
+use crate::playback::Playback;
 use crate::project;
 use crate::settings::{Settings, MAX_UI_SCALE, MIN_UI_SCALE};
 use crate::wrapped_image::WrappedImage;
@@ -81,6 +82,9 @@ pub enum UiEvent {
     ToggleFilters,
     NextFrame,
     PreviousFrame,
+    TogglePlayback,
+    StopPlayback,
+    SetPlaybackFps(f32),
     SetUiScale(f32),
     OpenSettings,
     ResetLayout,
@@ -169,6 +173,8 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             filters_enabled: state.inner.filters_enabled(),
             frame_count: state.inner.frame_count(),
             active_frame: state.inner.active_frame(),
+            is_playing: state.playback.is_playing(),
+            playback_fps: state.playback.fps(),
             palette: state.inner.palette().iter().map(|c| (*c).into()).collect(),
             mouse_canvas: (x, y).into(),
             is_on_canvas: in_canvas,
@@ -237,6 +243,8 @@ pub struct UiState {
     /// Set by the Export Frames shortcut, and consumed by the menu on the next
     /// frame to raise its options window.
     export_frames_requested: bool,
+    /// Plays the animation by advancing frames over time.
+    playback: Playback,
     /// Where a line, rectangle or ellipse being dragged started. Kept here
     /// because constraining the shape with shift needs the anchor as well as
     /// the cursor.
@@ -283,6 +291,7 @@ impl Default for UiState {
             manual_canvas_block: false,
             current_file: None,
             recent: RecentFiles::load(),
+            playback: Playback::new(),
             new_project_requested: false,
             export_layers_requested: false,
             export_image_requested: false,
@@ -332,7 +341,25 @@ impl UiState {
         let fx = self.input.update(&self.key_bindings);
         self.process_fx(fx)?;
 
+        self.advance_playback()?;
         self.sync_mouse();
+
+        Ok(())
+    }
+
+    /// Moves the animation forward if it's playing and a frame's time has
+    /// passed. The frame switch goes through the usual path, so the canvas and
+    /// the preview both follow it.
+    fn advance_playback(&mut self) -> Result<()> {
+        let steps = self.playback.advance();
+        let count = self.inner.frame_count();
+
+        if steps == 0 || count <= 1 {
+            return Ok(());
+        }
+
+        let next = (self.inner.active_frame() + steps) % count;
+        self.execute(Event::SwitchFrame(next))?;
 
         Ok(())
     }
@@ -510,7 +537,9 @@ impl UiState {
             // Marching ants around a selection being dragged.
             || self.inner.selection_in_progress(mouse_canvas).is_some()
             || self.inner.free_image().is_some()
-            || self.spritesheet_frames() > 1;
+            || self.spritesheet_frames() > 1
+            // Playing the animation needs a steady stream of frames to advance.
+            || self.playback.is_playing();
 
         if animating || self.gui.wants_repaint() || self.gui.is_arranging() {
             macroquad::miniquad::window::schedule_update();
@@ -740,6 +769,12 @@ impl UiState {
 
                 self.execute(Event::SwitchFrame(previous))?;
             }
+            UiEvent::TogglePlayback => self.playback.toggle(),
+            UiEvent::StopPlayback => {
+                self.playback.pause();
+                self.execute(Event::SwitchFrame(0))?;
+            }
+            UiEvent::SetPlaybackFps(fps) => self.playback.set_fps(fps),
             UiEvent::OpenSettings => self.gui.open_settings(),
             UiEvent::ResetLayout => self.gui.reset_layout(),
             UiEvent::MoveCamera(dir) => self.move_camera(dir),

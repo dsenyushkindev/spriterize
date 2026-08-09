@@ -13,6 +13,11 @@ fn default_brush_radius() -> u8 {
     0
 }
 
+/// How many past events to keep. Only the most recent is ever read, so a short
+/// tail is plenty; the margin is there in case some future continuity check
+/// wants to look back a few.
+const MAX_EVENT_HISTORY: usize = 16;
+
 /// Characters that can't appear in a file name on Windows, and are worth
 /// avoiding elsewhere too.
 const RESERVED_CHARS: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
@@ -568,6 +573,15 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         } else {
             let effect = event.canvas_effect();
             self.events.push(event);
+
+            // The history is only ever read as `.last()` — to know what the
+            // previous event was — so keep just a short tail. Without this it
+            // grows without bound: a long drawing session appends every stroke,
+            // and playing an animation appends a frame switch on every tick.
+            if self.events.len() > MAX_EVENT_HISTORY {
+                let excess = self.events.len() - MAX_EVENT_HISTORY;
+                self.events.drain(0..excess);
+            }
 
             Ok(effect)
         }
