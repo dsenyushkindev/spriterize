@@ -288,14 +288,6 @@ impl MenuBar {
                         events.push(Effect::UiEvent(UiEvent::ResetLayout));
                         ui.close_menu();
                     }
-                    if ui
-                        .button("Generator…")
-                        .on_hover_text("fill the active layer from an artlib script")
-                        .clicked()
-                    {
-                        events.push(Effect::UiEvent(UiEvent::OpenGenerator));
-                        ui.close_menu();
-                    }
                     if ui.button("Settings…").clicked() {
                         events.push(Effect::UiEvent(UiEvent::OpenSettings));
                         ui.close_menu();

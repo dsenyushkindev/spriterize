@@ -12,7 +12,8 @@ use std::path::PathBuf;
 /// - `..0xef`: before layers had filters and could be adjustment layers.
 /// - `..0xf0`: before filters carried their own settings.
 /// - `..0xf1`: before layers held a cel per frame.
-const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xf2];
+/// - `..0xf2`: before layers could carry a procedural generator recipe.
+const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xf3];
 
 pub fn save(path: PathBuf, bytes: Vec<u8>) {
     use std::io::Write;

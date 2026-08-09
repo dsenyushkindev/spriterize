@@ -1,6 +1,6 @@
 use crate::settings::Settings;
 use crate::{Effect, UiEvent};
-use lapix::{Filter, Position, Size, Tool};
+use lapix::{Filter, Generator, Position, Size, Tool};
 use macroquad::prelude::*;
 use std::path::PathBuf;
 
@@ -39,6 +39,7 @@ pub struct GuiSyncParams {
     pub layers_names: Vec<String>,
     pub layers_filters: Vec<Vec<Filter>>,
     pub layers_adjustment: Vec<bool>,
+    pub layers_generators: Vec<Option<Generator>>,
     pub frame_count: usize,
     pub active_frame: usize,
     pub is_playing: bool,
@@ -130,8 +131,14 @@ impl Gui {
         self.settings_window.open();
     }
 
-    pub fn open_generator(&mut self) {
-        self.generator_window.open();
+    /// Open the generator script editor on a layer's script.
+    pub fn open_generator_editor(&mut self, layer: usize, script: String) {
+        self.generator_window.open_for(layer, script);
+    }
+
+    /// Show the outcome of the last generator apply in the editor.
+    pub fn set_generator_error(&mut self, error: Option<String>) {
+        self.generator_window.set_error(error);
     }
 
     pub fn reset_layout(&mut self) {
@@ -157,7 +164,12 @@ impl Gui {
             params.layers_names.clone(),
             params.layers_filters.clone(),
             params.layers_adjustment.clone(),
+            params.layers_generators.clone(),
             params.filters_enabled,
+            (
+                params.canvas_size.x.max(1) as usize,
+                params.canvas_size.y.max(1) as usize,
+            ),
         );
         self.frames_panel.sync(
             params.frame_count,
@@ -170,7 +182,6 @@ impl Gui {
         self.ui_scale = params.ui_scale;
         self.settings_window
             .sync(params.settings.clone(), params.dpi_scale);
-        self.generator_window.sync(params.canvas_size);
         self.palette.sync(params.palette.clone(), params.main_color);
         self.menu.sync(
             params.canvas_size,

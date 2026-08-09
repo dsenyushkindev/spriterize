@@ -12,8 +12,8 @@ use crate::wrapped_image::WrappedImage;
 use crate::{graphics, Result, Timer};
 use lapix::primitives::*;
 use lapix::{
-    Bitmap, Canvas, CanvasEffect, Event, ExportOptions, LoadProject, SaveProject, Selection, State,
-    Tool,
+    Bitmap, Canvas, CanvasEffect, Event, ExportOptions, GenValue, Generator, LoadProject,
+    SaveProject, Selection, State, Tool,
 };
 use macroquad::prelude::Color as MqColor;
 use macroquad::prelude::{FilterMode, Texture2D};
@@ -92,13 +92,23 @@ pub enum UiEvent {
     ToggleOnionSkin,
     SetUiScale(f32),
     OpenSettings,
-    OpenGenerator,
-    /// Drop a generated image (RGBA8, `width * height` pixels) into the active
-    /// layer's active cel, as one undoable step.
-    SetGeneratedImage {
-        width: usize,
-        height: usize,
-        pixels: Vec<u8>,
+    /// Open the script editor on a layer's generator.
+    OpenGeneratorEditor {
+        layer: usize,
+    },
+    /// Set (or add) a layer's generator recipe, run it, and fill the layer.
+    UpdateGenerator {
+        layer: usize,
+        generator: Generator,
+    },
+    /// Re-run a layer's generator with an edited script, keeping its knob values.
+    SetGeneratorScript {
+        layer: usize,
+        script: String,
+    },
+    /// Remove a layer's generator recipe, leaving the pixels it made.
+    RemoveGenerator {
+        layer: usize,
     },
     ResetLayout,
     MoveCamera(Direction),
@@ -145,6 +155,26 @@ pub enum UiEvent {
     UnblockCanvas,
 }
 
+/// A generator's stored knob values as the DSL runner wants them.
+fn generator_knob_values(generator: &Generator) -> artlib_script::KnobValues {
+    generator
+        .values()
+        .iter()
+        .map(|(id, value)| (id.clone(), gen_value_to_knob(value)))
+        .collect()
+}
+
+fn gen_value_to_knob(value: &GenValue) -> artlib_script::KnobValue {
+    use artlib_script::KnobValue;
+
+    match value {
+        GenValue::Float(v) => KnobValue::Float(*v as f64),
+        GenValue::Int(v) => KnobValue::Int(*v),
+        GenValue::Color(c) => KnobValue::Color([c.r, c.g, c.b, c.a]),
+        GenValue::Bool(v) => KnobValue::Bool(*v),
+    }
+}
+
 impl UiEvent {
     pub fn is_gui_interaction(&self) -> bool {
         matches!(self, Self::MouseOverGui | Self::GuiInteraction)
@@ -182,6 +212,9 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
                 .collect(),
             layers_adjustment: (0..n_layers)
                 .map(|i| state.inner.layers().get(i).is_adjustment())
+                .collect(),
+            layers_generators: (0..n_layers)
+                .map(|i| state.inner.layers().get(i).generator().cloned())
                 .collect(),
             filters_enabled: state.inner.filters_enabled(),
             frame_count: state.inner.frame_count(),
@@ -771,6 +804,32 @@ impl UiState {
         }
     }
 
+    /// Run a layer's generator recipe, fill that layer with the result, and
+    /// store the recipe — all as one undoable step. On a script error the recipe
+    /// is still stored (so the broken code persists to fix) but the pixels are
+    /// left as they were, and the error is shown in the editor.
+    fn apply_generator(&mut self, layer: usize, generator: Generator) -> Result<()> {
+        let size = self.inner.canvas().size();
+        let (w, h) = (size.x.max(1) as usize, size.y.max(1) as usize);
+        let values = generator_knob_values(&generator);
+
+        match artlib_script::generate(&generator.script, w, h, values) {
+            Ok(result) => {
+                let img = WrappedImage::from_parts(Size::new(w as i32, h as i32), &result.pixels);
+                let effect = self.inner.set_layer_generator(layer, Some(generator), Some(img))?;
+                self.apply_canvas_effect(effect);
+                self.gui.set_generator_error(None);
+            }
+            Err(message) => {
+                let effect = self.inner.set_layer_generator(layer, Some(generator), None)?;
+                self.apply_canvas_effect(effect);
+                self.gui.set_generator_error(Some(message));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Note that the frames' pixels changed, so the thumbnails and the onion
     /// ghost are rebuilt from the new content.
     fn mark_frames_changed(&mut self) {
@@ -909,14 +968,33 @@ impl UiState {
             UiEvent::SetPlaybackFps(fps) => self.playback.set_fps(fps),
             UiEvent::ToggleOnionSkin => self.onion_skin = !self.onion_skin,
             UiEvent::OpenSettings => self.gui.open_settings(),
-            UiEvent::OpenGenerator => self.gui.open_generator(),
-            UiEvent::SetGeneratedImage {
-                width,
-                height,
-                pixels,
-            } => {
-                let img = WrappedImage::from_parts(Size::new(width as i32, height as i32), &pixels);
-                let effect = self.inner.set_active_cel_image(img)?;
+            UiEvent::OpenGeneratorEditor { layer } => {
+                let script = self
+                    .inner
+                    .layers()
+                    .get(layer)
+                    .generator()
+                    .map(|generator| generator.script.clone())
+                    .unwrap_or_default();
+                self.gui.open_generator_editor(layer, script);
+            }
+            UiEvent::UpdateGenerator { layer, generator } => {
+                self.apply_generator(layer, generator)?;
+            }
+            UiEvent::SetGeneratorScript { layer, script } => {
+                // Keep the knob values the layer already has; only the code
+                // changed.
+                let values = self
+                    .inner
+                    .layers()
+                    .get(layer)
+                    .generator()
+                    .map(|generator| generator.values().to_vec())
+                    .unwrap_or_default();
+                self.apply_generator(layer, Generator::with_values(script, values))?;
+            }
+            UiEvent::RemoveGenerator { layer } => {
+                let effect = self.inner.set_layer_generator(layer, None, None)?;
                 self.apply_canvas_effect(effect);
             }
             UiEvent::ResetLayout => self.gui.reset_layout(),

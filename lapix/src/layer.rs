@@ -1,5 +1,5 @@
 use crate::color::TRANSPARENT;
-use crate::{Bitmap, Canvas, Color, Filter, Point, Rect, Size};
+use crate::{Bitmap, Canvas, Color, Filter, Generator, Point, Rect, Size};
 use serde::{Deserialize, Serialize};
 use std::cell::{Ref, RefCell};
 
@@ -278,6 +278,16 @@ impl<IMG: Bitmap> Layers<IMG> {
         self.inner[index].set_adjustment(adjustment)
     }
 
+    /// Replace a layer's generator recipe, returning the one it had. Metadata
+    /// only — the pixels are set separately, so nothing to invalidate here.
+    pub fn set_generator(
+        &mut self,
+        index: usize,
+        generator: Option<Generator>,
+    ) -> Option<Generator> {
+        self.inner[index].set_generator(generator)
+    }
+
     /// Drop every layer's filtered image, so they are worked out again. Needed
     /// when something outside the layers changes the result, such as the
     /// palette a filter maps onto.
@@ -531,6 +541,10 @@ pub struct Layer<IMG> {
     /// When set, this layer draws nothing of its own: its filters apply to
     /// everything stacked below it instead.
     adjustment: bool,
+    /// The recipe that produced this layer's pixels, if any — kept so it can be
+    /// re-run and re-tuned. `default` so projects saved before generators load.
+    #[serde(default)]
+    generator: Option<Generator>,
 }
 
 impl<IMG: Bitmap> Layer<IMG> {
@@ -543,6 +557,7 @@ impl<IMG: Bitmap> Layer<IMG> {
             name: name.into(),
             filters: Vec::new(),
             adjustment: false,
+            generator: None,
         }
     }
 
@@ -575,6 +590,17 @@ impl<IMG: Bitmap> Layer<IMG> {
         self.invalidate_all();
 
         std::mem::replace(&mut self.filters, filters)
+    }
+
+    /// The generator recipe that fills this layer, if it has one.
+    pub fn generator(&self) -> Option<&Generator> {
+        self.generator.as_ref()
+    }
+
+    /// Replace this layer's generator recipe, returning the one it had. The
+    /// recipe is only metadata; the pixels it produced are set separately.
+    pub fn set_generator(&mut self, generator: Option<Generator>) -> Option<Generator> {
+        std::mem::replace(&mut self.generator, generator)
     }
 
     /// This layer's image for one frame as it should be seen, with its filters

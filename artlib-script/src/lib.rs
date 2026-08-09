@@ -843,6 +843,12 @@ pub fn run_script(source: &str, w: usize, h: usize) -> Result<Vec<u8>, String> {
     generate(source, w, h, KnobValues::new()).map(|g| g.pixels)
 }
 
+/// Just the knobs a script declares, for building its controls without caring
+/// about the pixels. Runs the script once at the given size.
+pub fn declared_knobs(source: &str, w: usize, h: usize) -> Result<Vec<Knob>, String> {
+    generate(source, w, h, KnobValues::new()).map(|g| g.knobs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

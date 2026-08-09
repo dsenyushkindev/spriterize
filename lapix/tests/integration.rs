@@ -1398,6 +1398,39 @@ fn set_active_cel_image_replaces_pixels_undoably() {
 
 #[cfg(feature = "test-utils")]
 #[test]
+fn a_generator_recipe_and_its_pixels_are_set_and_undone_together() {
+    use lapix::{Bitmap, GenValue, Generator};
+
+    let side = 4;
+    let mut state = State::<TestImage>::new(Size::new(side, side), None, None);
+    assert!(state.layers().get(0).generator().is_none());
+
+    // Apply a generator: its recipe and the pixels it produced land together.
+    let mut generator = Generator::new("pub fn main(w, h, p) { }".to_owned());
+    generator.set("radius", GenValue::Float(12.0));
+    let red = Color::new(255, 0, 0, 255);
+    let bytes: Vec<u8> = (0..side * side).flat_map(|_| [255, 0, 0, 255]).collect();
+    let img = TestImage::from_parts(Size::new(side, side), &bytes);
+
+    state
+        .set_layer_generator(0, Some(generator.clone()), Some(img))
+        .unwrap();
+    assert_eq!(state.layers().get(0).generator(), Some(&generator));
+    assert_eq!(state.canvas().pixel(Point::new(1, 1)), red);
+
+    // One undo reverts both the recipe and the pixels.
+    state.execute(Event::Undo).unwrap();
+    assert!(state.layers().get(0).generator().is_none());
+    assert_eq!(state.canvas().pixel(Point::new(1, 1)), TRANSPARENT);
+
+    // Redo brings both back.
+    state.execute(Event::Redo).unwrap();
+    assert_eq!(state.layers().get(0).generator(), Some(&generator));
+    assert_eq!(state.canvas().pixel(Point::new(1, 1)), red);
+}
+
+#[cfg(feature = "test-utils")]
+#[test]
 fn bucket_then_erase() {
     let side = 10;
     let mut state = State::<TestImage>::new(Size::new(side, side), None, None);

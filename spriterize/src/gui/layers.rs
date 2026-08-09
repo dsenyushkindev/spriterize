@@ -1,7 +1,10 @@
+use crate::gui::generator::DEFAULT_SCRIPT;
 use crate::gui::layout::{self, PanelLayout};
-use crate::Effect;
+use crate::{Effect, UiEvent};
+use artlib_script::{Knob, KnobKind, KnobValue};
 use lapix::filter::{ParamKind, Value};
-use lapix::{Event, Filter};
+use lapix::{Event, Filter, GenValue, Generator};
+use std::collections::HashMap;
 
 /// The settings of one filter. Returns the filter with them applied, if any
 /// were changed.
@@ -109,6 +112,76 @@ fn default_bool(spec: &lapix::filter::ParamSpec) -> bool {
     }
 }
 
+/// Render one generator knob, given its declaration and current value. Returns
+/// the new value if it changed. Mirrors the filter param controls, with a float
+/// slider added for `KnobKind::Float`.
+fn render_gen_knob(ui: &mut egui::Ui, knob: &Knob, current: Option<&GenValue>) -> Option<GenValue> {
+    match &knob.kind {
+        KnobKind::Float { min, max } => {
+            let mut value = match current {
+                Some(GenValue::Float(v)) => *v,
+                _ => gen_float_default(knob),
+            };
+            let response = ui.add(egui::Slider::new(&mut value, (*min as f32)..=(*max as f32)));
+            response.changed().then_some(GenValue::Float(value))
+        }
+        KnobKind::Int { min, max } => {
+            let mut value = match current {
+                Some(GenValue::Int(v)) => *v,
+                _ => gen_int_default(knob),
+            };
+            let response = ui.add(egui::Slider::new(&mut value, *min..=*max));
+            response.changed().then_some(GenValue::Int(value))
+        }
+        KnobKind::Color => {
+            let mut rgba = match current {
+                Some(GenValue::Color(c)) => [c.r, c.g, c.b, c.a],
+                _ => gen_color_default(knob),
+            };
+            let response = ui.color_edit_button_srgba_unmultiplied(&mut rgba);
+            response
+                .changed()
+                .then(|| GenValue::Color(lapix::Color::new(rgba[0], rgba[1], rgba[2], rgba[3])))
+        }
+        KnobKind::Bool => {
+            let mut value = match current {
+                Some(GenValue::Bool(v)) => *v,
+                _ => gen_bool_default(knob),
+            };
+            let response = ui.checkbox(&mut value, "");
+            response.changed().then_some(GenValue::Bool(value))
+        }
+    }
+}
+
+fn gen_float_default(knob: &Knob) -> f32 {
+    match &knob.default {
+        KnobValue::Float(v) => *v as f32,
+        _ => 0.0,
+    }
+}
+
+fn gen_int_default(knob: &Knob) -> i64 {
+    match &knob.default {
+        KnobValue::Int(v) => *v,
+        _ => 0,
+    }
+}
+
+fn gen_color_default(knob: &Knob) -> [u8; 4] {
+    match &knob.default {
+        KnobValue::Color(c) => *c,
+        _ => [0, 0, 0, 255],
+    }
+}
+
+fn gen_bool_default(knob: &Knob) -> bool {
+    match &knob.default {
+        KnobValue::Bool(v) => *v,
+        _ => false,
+    }
+}
+
 /// Narrowest the layer name field is allowed to get, whatever the other columns
 /// need.
 const MIN_NAME_WIDTH: f32 = 120.;
@@ -127,9 +200,17 @@ pub struct LayersPanel {
     layers_names: Vec<String>,
     layers_filters: Vec<Vec<Filter>>,
     layers_adjustment: Vec<bool>,
+    layers_generators: Vec<Option<Generator>>,
     filters_enabled: bool,
     /// Which layer's filter chain is expanded, if any.
     editing_filters: Option<usize>,
+    /// Which layer's generator is expanded, if any.
+    editing_generator: Option<usize>,
+    /// Canvas size, to run generators at and to size their output.
+    canvas_size: (usize, usize),
+    /// The knobs each script declares, cached by script so the controls don't
+    /// re-run the script every frame. Holds the error if a script won't compile.
+    knob_cache: HashMap<String, Result<Vec<Knob>, String>>,
     /// Width of the name field, set to whatever the other columns leave over.
     name_width: f32,
 }
@@ -144,8 +225,12 @@ impl LayersPanel {
             layers_names: vec!["Layer 1".to_owned()],
             layers_filters: vec![Vec::new()],
             layers_adjustment: vec![false],
+            layers_generators: vec![None],
             filters_enabled: true,
             editing_filters: None,
+            editing_generator: None,
+            canvas_size: (64, 64),
+            knob_cache: HashMap::new(),
             name_width: MIN_NAME_WIDTH,
         }
     }
@@ -160,7 +245,9 @@ impl LayersPanel {
         layers_names: Vec<String>,
         layers_filters: Vec<Vec<Filter>>,
         layers_adjustment: Vec<bool>,
+        layers_generators: Vec<Option<Generator>>,
         filters_enabled: bool,
+        canvas_size: (usize, usize),
     ) {
         self.active_layer = active_layer;
         self.num_layers = num_layers;
@@ -169,11 +256,16 @@ impl LayersPanel {
         self.layers_names = layers_names;
         self.layers_filters = layers_filters;
         self.layers_adjustment = layers_adjustment;
+        self.layers_generators = layers_generators;
         self.filters_enabled = filters_enabled;
+        self.canvas_size = canvas_size;
 
         // A layer that was being edited may have been deleted.
         if self.editing_filters.is_some_and(|i| i >= num_layers) {
             self.editing_filters = None;
+        }
+        if self.editing_generator.is_some_and(|i| i >= num_layers) {
+            self.editing_generator = None;
         }
     }
 
@@ -259,6 +351,81 @@ impl LayersPanel {
 
         if let Some(filters) = changed {
             events.push(Event::SetLayerFilters(layer, filters).into());
+        }
+    }
+
+    /// The generator controls for one layer, shown under it when expanded: an
+    /// Edit-script button, the knobs the script declares, and remove — or, if
+    /// the layer has no generator yet, a button to add one.
+    fn generator_section(&mut self, ui: &mut egui::Ui, layer: usize, events: &mut Vec<Effect>) {
+        // Cloned up front so the knob cache — also on `self` — can be borrowed
+        // mutably below without conflicting with the recipe.
+        let generator = self.layers_generators[layer].clone();
+
+        let Some(generator) = generator else {
+            if ui
+                .button("Add generator")
+                .on_hover_text("fill this layer from an artlib script")
+                .clicked()
+            {
+                events.push(Effect::UiEvent(UiEvent::UpdateGenerator {
+                    layer,
+                    generator: Generator::new(DEFAULT_SCRIPT.to_owned()),
+                }));
+            }
+            return;
+        };
+
+        ui.horizontal(|ui| {
+            if ui
+                .button("Edit script…")
+                .on_hover_text("open this layer's script")
+                .clicked()
+            {
+                events.push(Effect::UiEvent(UiEvent::OpenGeneratorEditor { layer }));
+            }
+            if ui
+                .button("remove")
+                .on_hover_text("remove the generator (keeps the pixels it made)")
+                .clicked()
+            {
+                events.push(Effect::UiEvent(UiEvent::RemoveGenerator { layer }));
+            }
+        });
+
+        // The declarations come from running the script; cache them by script so
+        // this doesn't run every frame.
+        let (w, h) = self.canvas_size;
+        let knobs = self
+            .knob_cache
+            .entry(generator.script.clone())
+            .or_insert_with(|| artlib_script::declared_knobs(&generator.script, w, h));
+
+        match knobs {
+            Ok(knobs) => {
+                if knobs.is_empty() {
+                    ui.weak("no parameters");
+                }
+
+                let mut updated: Option<Generator> = None;
+                for knob in knobs.iter() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}:", knob.id));
+                        if let Some(value) = render_gen_knob(ui, knob, generator.get(&knob.id)) {
+                            let mut next = generator.clone();
+                            next.set(&knob.id, value);
+                            updated = Some(next);
+                        }
+                    });
+                }
+
+                if let Some(generator) = updated {
+                    events.push(Effect::UiEvent(UiEvent::UpdateGenerator { layer, generator }));
+                }
+            }
+            Err(error) => {
+                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error.clone());
+            }
         }
     }
 
@@ -374,6 +541,21 @@ impl LayersPanel {
                             {
                                 self.editing_filters = if expanded { None } else { Some(i) };
                             }
+                            // Generator toggle. A dot marks a layer that has one.
+                            let gen_label = if self.layers_generators[i].is_some() {
+                                "gen•"
+                            } else {
+                                "gen"
+                            };
+                            let gen_expanded = self.editing_generator == Some(i);
+
+                            if ui
+                                .selectable_label(gen_expanded, gen_label)
+                                .on_hover_text("procedural generator that fills this layer")
+                                .clicked()
+                            {
+                                self.editing_generator = if gen_expanded { None } else { Some(i) };
+                            }
                             // Delete layer button
                             ui.add_enabled_ui(self.num_layers > 1, |ui| {
                                 if ui.button("x").on_hover_text("delete layer").clicked() {
@@ -414,6 +596,15 @@ impl LayersPanel {
                     }
                 });
                 self.filter_chain(ui, layer, &mut events);
+            }
+
+            if let Some(layer) = self.editing_generator {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.strong(&self.layers_names[layer]);
+                    ui.weak("generator");
+                });
+                self.generator_section(ui, layer, &mut events);
             }
 
             // Hand the name field whatever width the other columns don't need,

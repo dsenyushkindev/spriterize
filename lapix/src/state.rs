@@ -2,7 +2,8 @@ use crate::color::{BLACK, TRANSPARENT};
 use crate::util::{LoadProject, SaveProject};
 use crate::{
     export, graphics, util, Action, AtomicAction, Bitmap, Canvas, CanvasEffect, Color, Error,
-    Event, ExportOptions, FreeImage, Layers, Palette, Point, Position, Rect, Result, Size, Tool,
+    Event, ExportOptions, FreeImage, Generator, Layers, Palette, Point, Position, Rect, Result,
+    Size, Tool,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -624,6 +625,38 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         let reversal = AtomicAction::SetLayerCanvas(layer, frame, old);
         self.start_action();
         self.add_to_action(vec![reversal])?;
+        self.end_action();
+
+        Ok(CanvasEffect::Layer)
+    }
+
+    /// Set (or clear) a layer's generator recipe and, optionally, replace its
+    /// active-frame pixels with `img` — as one undoable step.
+    ///
+    /// The frontend runs the script (the core has no scripting engine) and hands
+    /// back both the recipe to remember and the pixels it produced. Adjusting a
+    /// knob is the same call with a new recipe and new pixels; removing the
+    /// generator is `None`, `None`. Undo restores the previous recipe and, if
+    /// pixels were replaced, the previous image.
+    pub fn set_layer_generator(
+        &mut self,
+        layer: usize,
+        generator: Option<Generator>,
+        img: Option<IMG>,
+    ) -> Result<CanvasEffect> {
+        self.start_action();
+        let mut reversals = Vec::new();
+
+        if let Some(img) = img {
+            let frame = self.layers.active_frame();
+            let old_img = self.layers.set_cel_img(layer, frame, img);
+            reversals.push(AtomicAction::SetLayerCanvas(layer, frame, old_img));
+        }
+
+        let old_generator = self.layers.set_generator(layer, generator);
+        reversals.push(AtomicAction::SetLayerGenerator(layer, old_generator));
+
+        self.add_to_action(reversals)?;
         self.end_action();
 
         Ok(CanvasEffect::Layer)

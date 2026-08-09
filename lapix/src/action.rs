@@ -1,5 +1,5 @@
 use crate::layer::Cel;
-use crate::{Bitmap, CanvasEffect, Color, Filter, Layer, Layers, Point};
+use crate::{Bitmap, CanvasEffect, Color, Filter, Generator, Layer, Layers, Point};
 use std::fmt::Debug;
 
 pub type LayerIndex = usize;
@@ -82,6 +82,7 @@ pub enum AtomicAction<IMG> {
     CreateLayer(LayerIndex, Layer<IMG>),
     SetLayerCanvas(LayerIndex, FrameIndex, IMG),
     SetLayerFilters(LayerIndex, Vec<Filter>),
+    SetLayerGenerator(LayerIndex, Option<Generator>),
     SetLayerAdjustment(LayerIndex, bool),
     // A frame's worth of cels, one per layer in layer order.
     RemoveFrame(FrameIndex),
@@ -110,6 +111,9 @@ impl<IMG> Debug for AtomicAction<IMG> {
                 .field(&i)
                 .field(&filters)
                 .finish(),
+            Self::SetLayerGenerator(i, _) => {
+                f.debug_tuple("SetLayerGenerator").field(&i).finish()
+            }
             Self::SetLayerAdjustment(i, adjustment) => f
                 .debug_tuple("SetLayerAdjustment")
                 .field(&i)
@@ -156,6 +160,10 @@ impl<IMG: Bitmap> AtomicAction<IMG> {
             Self::SetLayerFilters(i, filters) => {
                 Some(Self::SetLayerFilters(i, layers.set_filters(i, filters)))
             }
+            Self::SetLayerGenerator(i, generator) => Some(Self::SetLayerGenerator(
+                i,
+                layers.set_generator(i, generator),
+            )),
             Self::SetLayerAdjustment(i, adjustment) => Some(Self::SetLayerAdjustment(
                 i,
                 layers.set_adjustment(i, adjustment),
