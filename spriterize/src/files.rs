@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// Extension of a saved project, as opposed to an imported or exported image.
 pub const PROJECT_EXTENSION: &str = "spriterize";
+pub use crate::collection::COLLECTION_EXTENSION;
 
 const MAX_RECENT: usize = 10;
 const APP_DIR: &str = "spriterize";
@@ -16,6 +17,11 @@ const RECENT_FILE_NAME: &str = "recent.txt";
 pub fn is_project(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case(PROJECT_EXTENSION))
+}
+
+pub fn is_collection(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(COLLECTION_EXTENSION))
 }
 
 /// Starts a dialog in the directory of the file currently in use, so that the
@@ -37,12 +43,52 @@ pub fn open_project(near: Option<&Path>) -> Option<PathBuf> {
         .pick_file()
 }
 
+/// Opens any document the application understands. Used by the start screen,
+/// where choosing a document should not require knowing its kind first.
+pub fn open_document(near: Option<&Path>) -> Option<PathBuf> {
+    dialog(near)
+        .add_filter(
+            "Spriterize documents",
+            &[
+                PROJECT_EXTENSION,
+                COLLECTION_EXTENSION,
+                "png",
+                "jpg",
+                "jpeg",
+            ],
+        )
+        .add_filter("Spriterize projects", &[PROJECT_EXTENSION])
+        .add_filter("Spriterize asset collections", &[COLLECTION_EXTENSION])
+        .add_filter("Images", &["png", "jpg", "jpeg"])
+        .add_filter("All files", &["*"])
+        .pick_file()
+}
+
 pub fn save_project(near: Option<&Path>) -> Option<PathBuf> {
     dialog(near)
         .add_filter("Spriterize projects", &[PROJECT_EXTENSION])
         .add_filter("All files", &["*"])
         .set_file_name(&format!("project.{PROJECT_EXTENSION}"))
         .save_file()
+}
+
+pub fn open_collection(near: Option<&Path>) -> Option<PathBuf> {
+    dialog(near)
+        .add_filter("Spriterize asset collections", &[COLLECTION_EXTENSION])
+        .add_filter("All files", &["*"])
+        .pick_file()
+}
+
+pub fn save_collection(near: Option<&Path>) -> Option<PathBuf> {
+    dialog(near)
+        .add_filter("Spriterize asset collections", &[COLLECTION_EXTENSION])
+        .add_filter("All files", &["*"])
+        .set_file_name(&format!("assets.{COLLECTION_EXTENSION}"))
+        .save_file()
+}
+
+pub fn export_collection_dir(near: Option<&Path>) -> Option<PathBuf> {
+    dialog(near).pick_folder()
 }
 
 pub fn export_image(near: Option<&Path>) -> Option<PathBuf> {
@@ -163,6 +209,13 @@ mod tests {
         assert!(is_project(Path::new("HERO.SPRITERIZE")));
         assert!(!is_project(Path::new("hero.png")));
         assert!(!is_project(Path::new("hero")));
+    }
+
+    #[test]
+    fn recognizes_collection_paths() {
+        assert!(is_collection(Path::new("game.spriterize-collection")));
+        assert!(is_collection(Path::new("GAME.SPRITERIZE-COLLECTION")));
+        assert!(!is_collection(Path::new("game.spriterize")));
     }
 
     #[test]

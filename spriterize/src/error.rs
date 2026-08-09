@@ -7,4 +7,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("Image error: {0}")]
     LapixError(#[from] LapixError),
+    #[error("Asset collection error: {0}")]
+    Collection(#[from] crate::collection::CollectionError),
 }

@@ -4,11 +4,13 @@ use lapix::{Filter, Generator, Position, Size, Tool};
 use macroquad::prelude::*;
 use std::path::PathBuf;
 
+mod collection;
 mod export;
 mod frames;
 mod generator;
 // Compiled and tested now; the viewer and layer wiring land in the next graph-editor slice.
 pub(crate) mod graph;
+mod launcher;
 mod layers;
 mod layout;
 mod menu;
@@ -19,9 +21,11 @@ mod settings;
 mod status;
 mod toolbar;
 
+use collection::CollectionWindow;
 pub use frames::FrameImage;
 use frames::FramesPanel;
 use generator::GeneratorWindow;
+use launcher::Launcher;
 use layers::LayersPanel;
 use layout::PanelLayout;
 use menu::MenuBar;
@@ -30,6 +34,14 @@ use preview::Preview;
 use settings::SettingsWindow;
 use status::StatusBar;
 use toolbar::Toolbar;
+
+#[derive(Debug, Clone)]
+pub struct CollectionSync {
+    pub name: String,
+    pub assets: Vec<String>,
+    pub projects: Vec<(String, String)>,
+    pub active_project: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct GuiSyncParams {
@@ -61,6 +73,8 @@ pub struct GuiSyncParams {
     pub can_redo: bool,
     pub recent_files: Vec<PathBuf>,
     pub current_file: Option<PathBuf>,
+    pub collection: Option<CollectionSync>,
+    pub show_launcher: bool,
     pub new_project_requested: bool,
     pub export_layers_requested: bool,
     pub export_image_requested: bool,
@@ -82,6 +96,8 @@ pub struct Gui {
     menu: MenuBar,
     settings_window: SettingsWindow,
     generator_window: GeneratorWindow,
+    collection_window: CollectionWindow,
+    launcher: Launcher,
     layout: PanelLayout,
     mouse_on_canvas: bool,
     selected_tool: Tool,
@@ -90,6 +106,7 @@ pub struct Gui {
     /// cursor) and needs another frame to finish it.
     wants_repaint: bool,
     ui_scale: f32,
+    show_launcher: bool,
 }
 
 impl Gui {
@@ -104,12 +121,15 @@ impl Gui {
             menu: MenuBar::new(),
             settings_window: SettingsWindow::new(),
             generator_window: GeneratorWindow::new(),
+            collection_window: CollectionWindow::new(),
+            launcher: Launcher::new(),
             layout: PanelLayout::new(),
             mouse_on_canvas: false,
             selected_tool: Tool::Brush,
             brush_radius: 0,
             wants_repaint: false,
             ui_scale: 1.,
+            show_launcher: true,
         }
     }
 
@@ -138,6 +158,10 @@ impl Gui {
         self.generator_window.open_for(layer, generator);
     }
 
+    pub fn open_collection_window(&mut self) {
+        self.collection_window.open();
+    }
+
     /// Show the outcome of the last generator apply in the editor.
     pub fn set_generator_error(&mut self, error: Option<String>) {
         self.generator_window.set_error(error);
@@ -150,7 +174,7 @@ impl Gui {
     /// Whether the tool windows are still being positioned, and so another
     /// frame is needed even if nothing else is happening.
     pub fn is_arranging(&self) -> bool {
-        self.layout.is_arranging()
+        !self.show_launcher && self.layout.is_arranging()
     }
 
     pub fn sync(&mut self, params: GuiSyncParams) {
@@ -198,7 +222,11 @@ impl Gui {
             params.num_layers,
             params.frame_count,
             params.filters_enabled,
+            params.collection.clone(),
         );
+        self.collection_window.sync(params.collection.clone());
+        self.launcher.sync(params.recent_files.clone());
+        self.show_launcher = params.show_launcher;
         self.status_bar.sync(params);
     }
 
@@ -211,6 +239,13 @@ impl Gui {
             // lays the whole interface out as though the screen were unscaled.
             egui_ctx.set_pixels_per_point(self.ui_scale);
             crate::theme::apply_egui_visuals(egui_ctx);
+
+            if self.show_launcher {
+                self.mouse_on_canvas = false;
+                events.append(&mut self.launcher.update(egui_ctx));
+                self.wants_repaint = egui_ctx.has_requested_repaint();
+                return;
+            }
 
             let mut palette_events = self.palette.update(egui_ctx, &self.layout);
             events.append(&mut palette_events);
@@ -240,6 +275,9 @@ impl Gui {
 
             let mut generator_events = self.generator_window.update(egui_ctx);
             events.append(&mut generator_events);
+
+            let mut collection_events = self.collection_window.update(egui_ctx);
+            events.append(&mut collection_events);
 
             let mut canvas_panel_events = self.update_canvas_panel(egui_ctx);
             events.append(&mut canvas_panel_events);

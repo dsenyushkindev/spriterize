@@ -1,7 +1,8 @@
 use crate::bg::Background;
+use crate::collection::AssetCollection;
 use crate::files::{self, RecentFiles};
 use crate::graphics::DrawContext;
-use crate::gui::{Gui, GuiSyncParams};
+use crate::gui::{CollectionSync, Gui, GuiSyncParams};
 use crate::input::bindings::KeyBindings;
 use crate::input::manager::InputManager;
 use crate::mouse::{CursorType, MouseManager};
@@ -117,6 +118,15 @@ pub enum UiEvent {
     Paste,
     Exit,
     NewProject,
+    CreateCollection,
+    CreateCollectionProject {
+        name: String,
+        width: u16,
+        height: u16,
+    },
+    SwitchCollectionProject(String),
+    OpenDocument,
+    ShowLauncher,
     /// Ask the menu to put up its "discard the current project?" confirmation
     RequestNewProject,
     OpenProject,
@@ -141,6 +151,10 @@ pub enum UiEvent {
     /// down
     ExportFrameSheet(u8, u8, ExportOptions),
     ImportImage,
+    OpenCollection,
+    ShowCollection,
+    ExportCollection,
+    ExportCollectionSelected(Vec<String>),
     OpenRecent(PathBuf),
     ClearRecent,
     GuiInteraction,
@@ -252,6 +266,24 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
             can_redo: state.inner.can_redo(),
             recent_files: state.recent.paths().to_vec(),
             current_file: state.current_file.clone(),
+            collection: state
+                .current_collection
+                .as_ref()
+                .map(|(_, collection)| CollectionSync {
+                    name: collection.name.clone(),
+                    assets: collection
+                        .assets
+                        .iter()
+                        .map(|asset| asset.id.clone())
+                        .collect(),
+                    projects: collection
+                        .projects
+                        .iter()
+                        .map(|project| (project.id.clone(), project.name.clone()))
+                        .collect(),
+                    active_project: state.active_collection_project.clone(),
+                }),
+            show_launcher: state.show_launcher,
             new_project_requested: state.new_project_requested,
             export_layers_requested: state.export_layers_requested,
             export_image_requested: state.export_image_requested,
@@ -294,6 +326,14 @@ pub struct UiState {
     prev_cursor: CursorType,
     /// The file this project was last opened from or saved to.
     current_file: Option<PathBuf>,
+    /// A generator collection is an export catalog alongside the active
+    /// project, not a replacement for the editable canvas document.
+    current_collection: Option<(PathBuf, AssetCollection)>,
+    /// Id of the embedded project currently loaded into `inner`.
+    active_collection_project: Option<String>,
+    /// The neutral document chooser shown before an editing context has been
+    /// selected. The already-constructed editor remains dormant behind it.
+    show_launcher: bool,
     recent: RecentFiles,
     /// Set by the New Project shortcut, and consumed by the menu on the next
     /// frame to raise its confirmation window.
@@ -365,6 +405,9 @@ impl Default for UiState {
             prev_cursor: CursorType::Tool(Tool::Brush),
             manual_canvas_block: false,
             current_file: None,
+            current_collection: None,
+            active_collection_project: None,
+            show_launcher: true,
             recent: RecentFiles::load(),
             playback: Playback::new(),
             onion_skin: false,
@@ -431,6 +474,12 @@ impl UiState {
         self.export_frames_requested = false;
         let fx = self.gui.update();
         self.process_fx(fx)?;
+
+        // The launcher owns input while visible. In particular, editor
+        // shortcuts must not create strokes or mutate the dormant project.
+        if self.show_launcher {
+            return Ok(());
+        }
 
         let (x, y) = macroquad::prelude::mouse_position();
         let sp = (x, y).into();
@@ -654,6 +703,11 @@ impl UiState {
     /// Opens a path, loading it as a project or importing it as an image
     /// depending on its extension. This is what the recent files list replays.
     fn open_path(&mut self, path: PathBuf) -> Result<()> {
+        if files::is_collection(&path) {
+            return self.open_collection_path(path);
+        }
+        self.persist_active_collection_project()?;
+        self.active_collection_project = None;
         if files::is_project(&path) {
             self.execute(Event::LoadProject(path.clone()))?;
         } else {
@@ -662,7 +716,145 @@ impl UiState {
         }
 
         self.set_current_file(path);
+        self.show_launcher = false;
 
+        Ok(())
+    }
+
+    fn open_collection_path(&mut self, path: PathBuf) -> Result<()> {
+        self.persist_active_collection_project()?;
+        let collection = AssetCollection::load(&path)?;
+        let first = collection
+            .projects
+            .first()
+            .map(|project| project.id.clone());
+        self.recent.push(path.clone());
+        self.current_collection = Some((path, collection));
+        self.active_collection_project = None;
+        self.show_launcher = false;
+        if let Some(id) = first {
+            self.switch_collection_project(&id)?;
+        }
+        self.gui.open_collection_window();
+        Ok(())
+    }
+
+    fn create_collection(&mut self) -> Result<()> {
+        self.persist_active_collection_project()?;
+        let near = self
+            .current_collection
+            .as_ref()
+            .map(|(path, _)| path.as_path())
+            .or(self.current_file.as_deref());
+        let Some(path) = files::save_collection(near) else {
+            return Ok(());
+        };
+        let name = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Asset Collection");
+        let collection = AssetCollection::new(name);
+        collection.save(&path)?;
+        self.recent.push(path.clone());
+        self.current_collection = Some((path, collection));
+        self.active_collection_project = None;
+        self.show_launcher = false;
+        self.gui.open_collection_window();
+        Ok(())
+    }
+
+    fn create_collection_project(&mut self, name: String, width: u16, height: u16) -> Result<()> {
+        self.persist_active_collection_project()?;
+        let state = State::<WrappedImage>::new(
+            (width as i32, height as i32).into(),
+            Some(LoadProject(project::load)),
+            Some(SaveProject(project::save)),
+        );
+        let data = state.project_bytes()?;
+        let Some((path, collection)) = &mut self.current_collection else {
+            return Ok(());
+        };
+        let id = collection.add_project(name, data)?;
+        collection.save(&*path)?;
+        self.switch_collection_project(&id)
+    }
+
+    /// Save the editor state back into its project entry and rewrite the
+    /// collection from the in-memory archive model.
+    fn persist_active_collection_project(&mut self) -> Result<()> {
+        let Some(id) = self.active_collection_project.clone() else {
+            return Ok(());
+        };
+        let data = self.inner.project_bytes()?;
+        let Some((path, collection)) = &mut self.current_collection else {
+            self.active_collection_project = None;
+            return Ok(());
+        };
+        let Some(project) = collection
+            .projects
+            .iter_mut()
+            .find(|project| project.id == id)
+        else {
+            self.active_collection_project = None;
+            return Ok(());
+        };
+        project.data = data;
+        collection.format_version = crate::collection::FORMAT_VERSION;
+        collection.save(&*path)?;
+        Ok(())
+    }
+
+    fn switch_collection_project(&mut self, id: &str) -> Result<()> {
+        if self.active_collection_project.as_deref() == Some(id) {
+            return Ok(());
+        }
+        self.persist_active_collection_project()?;
+        let data = self
+            .current_collection
+            .as_ref()
+            .and_then(|(_, collection)| collection.projects.iter().find(|project| project.id == id))
+            .map(|project| project.data.clone());
+        let Some(data) = data else {
+            return Ok(());
+        };
+        let effect = self.inner.load_project_bytes(&data)?;
+        self.apply_canvas_effect(effect);
+        self.active_collection_project = Some(id.to_owned());
+        self.current_file = None;
+        self.center_canvas();
+        Ok(())
+    }
+
+    fn export_collection(&mut self) -> Result<()> {
+        self.export_collection_selected(&[])
+    }
+
+    fn save_active_project_copy(&mut self) -> Result<()> {
+        let near = self
+            .current_collection
+            .as_ref()
+            .map(|(path, _)| path.as_path());
+        if let Some(path) = files::save_project(near) {
+            project::save(path.clone(), self.inner.project_bytes()?);
+            self.recent.push(path);
+        }
+        Ok(())
+    }
+
+    fn export_collection_selected(&mut self, selected: &[String]) -> Result<()> {
+        self.persist_active_collection_project()?;
+        let Some((path, collection)) = &self.current_collection else {
+            return Ok(());
+        };
+        if let Some(directory) = files::export_collection_dir(Some(path)) {
+            if selected.is_empty() {
+                collection.export_all(directory)?;
+            } else {
+                collection.export_selected(directory, selected.iter().map(String::as_str))?;
+            }
+        }
         Ok(())
     }
 
@@ -717,6 +909,13 @@ impl UiState {
 
     pub fn draw(&mut self) -> Result<()> {
         macroquad::prelude::clear_background(BG_COLOR);
+
+        if self.show_launcher {
+            egui_macroquad::draw();
+            self.mouse.draw();
+            self.schedule_next_frame();
+            return Ok(());
+        }
 
         let ctx = self.draw_ctx();
 
@@ -1035,8 +1234,38 @@ impl UiState {
             UiEvent::Paste => {
                 self.execute(Event::Paste(p))?;
             }
-            UiEvent::Exit => self.must_exit = true,
-            UiEvent::NewProject => *self = UiState::default(),
+            UiEvent::Exit => {
+                self.persist_active_collection_project()?;
+                self.must_exit = true;
+            }
+            UiEvent::NewProject => {
+                self.persist_active_collection_project()?;
+                let collection = self.current_collection.take();
+                *self = UiState::default();
+                self.current_collection = collection;
+                self.show_launcher = false;
+            }
+            UiEvent::CreateCollection => self.create_collection()?,
+            UiEvent::CreateCollectionProject {
+                name,
+                width,
+                height,
+            } => self.create_collection_project(name, width, height)?,
+            UiEvent::SwitchCollectionProject(id) => self.switch_collection_project(&id)?,
+            UiEvent::OpenDocument => {
+                let near = self
+                    .current_collection
+                    .as_ref()
+                    .map(|(path, _)| path.as_path())
+                    .or(self.current_file.as_deref());
+                if let Some(path) = files::open_document(near) {
+                    self.open_path(path)?;
+                }
+            }
+            UiEvent::ShowLauncher => {
+                self.persist_active_collection_project()?;
+                self.show_launcher = true;
+            }
             UiEvent::RequestNewProject => self.new_project_requested = true,
             UiEvent::OpenProject => {
                 if let Some(path) = files::open_project(self.current_file.as_deref()) {
@@ -1044,6 +1273,10 @@ impl UiState {
                 }
             }
             UiEvent::SaveProject => {
+                if self.active_collection_project.is_some() {
+                    self.persist_active_collection_project()?;
+                    return Ok(());
+                }
                 // Save straight back to the open project; only ask for a path
                 // when there isn't one yet.
                 match self.current_file.clone().filter(|p| files::is_project(p)) {
@@ -1051,7 +1284,13 @@ impl UiState {
                     None => self.save_project_as()?,
                 }
             }
-            UiEvent::SaveProjectAs => self.save_project_as()?,
+            UiEvent::SaveProjectAs => {
+                if self.active_collection_project.is_some() {
+                    self.save_active_project_copy()?;
+                } else {
+                    self.save_project_as()?;
+                }
+            }
             UiEvent::ExportImage => self.export_image_requested = true,
             UiEvent::ExportImageAs(options) => {
                 if let Some(path) = files::export_image(self.current_file.as_deref()) {
@@ -1098,6 +1337,21 @@ impl UiState {
                 if let Some(path) = files::import_image(self.current_file.as_deref()) {
                     self.open_path(path)?;
                 }
+            }
+            UiEvent::OpenCollection => {
+                let near = self
+                    .current_collection
+                    .as_ref()
+                    .map(|(path, _)| path.as_path())
+                    .or(self.current_file.as_deref());
+                if let Some(path) = files::open_collection(near) {
+                    self.open_collection_path(path)?;
+                }
+            }
+            UiEvent::ShowCollection => self.gui.open_collection_window(),
+            UiEvent::ExportCollection => self.export_collection()?,
+            UiEvent::ExportCollectionSelected(selected) => {
+                self.export_collection_selected(&selected)?
             }
             UiEvent::OpenRecent(path) => self.open_path(path)?,
             UiEvent::ClearRecent => self.recent.clear(),

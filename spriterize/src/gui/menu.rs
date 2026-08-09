@@ -1,4 +1,5 @@
 use crate::gui::export::ExportSettings;
+use crate::gui::CollectionSync;
 use crate::{Effect, UiEvent};
 use lapix::{Event, ExportOptions, Size, Transform};
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ pub struct MenuBar {
     sheet_str: (String, String),
     num_layers: usize,
     frame_count: usize,
+    collection: Option<CollectionSync>,
 }
 
 /// The two things the export window can lay out.
@@ -93,6 +95,7 @@ impl MenuBar {
             sheet_str: ("1".to_owned(), "1".to_owned()),
             num_layers: 1,
             frame_count: 1,
+            collection: None,
         }
     }
 
@@ -111,6 +114,7 @@ impl MenuBar {
         num_layers: usize,
         frame_count: usize,
         filters_enabled: bool,
+        collection: Option<CollectionSync>,
     ) {
         self.canvas_size = canvas_size;
         self.spritesheet = spritesheet;
@@ -120,6 +124,7 @@ impl MenuBar {
         self.filters_enabled = filters_enabled;
         self.num_layers = num_layers;
         self.frame_count = frame_count;
+        self.collection = collection;
         self.canvas_size_for_export = canvas_size;
 
         if export_image_requested {
@@ -181,6 +186,38 @@ impl MenuBar {
                         }
                     }
 
+                    ui.separator();
+                    if ui.button("New Asset Collection…").clicked() {
+                        events.push(Effect::UiEvent(UiEvent::CreateCollection));
+                        ui.close_menu();
+                    }
+                    if ui.button("Open Asset Collection…").clicked() {
+                        events.push(Effect::UiEvent(UiEvent::OpenCollection));
+                        ui.close_menu();
+                    }
+                    let collection_label = self
+                        .collection
+                        .as_ref()
+                        .map(|collection| {
+                            format!(
+                                "Asset Collection “{}” ({} projects, {} generated)…",
+                                collection.name,
+                                collection.projects.len(),
+                                collection.assets.len()
+                            )
+                        })
+                        .unwrap_or_else(|| "Asset Collection…".to_owned());
+                    if ui
+                        .add_enabled(
+                            self.collection.is_some(),
+                            egui::Button::new(collection_label),
+                        )
+                        .clicked()
+                    {
+                        events.push(Effect::UiEvent(UiEvent::ShowCollection));
+                        ui.close_menu();
+                    }
+
                     ui.menu_button("Open Recent", |ui| {
                         if self.recent_files.is_empty() {
                             ui.add_enabled(false, egui::Button::new("(nothing yet)"));
@@ -212,6 +249,11 @@ impl MenuBar {
                     });
 
                     ui.separator();
+
+                    if ui.button("Start Screen").clicked() {
+                        events.push(Effect::UiEvent(UiEvent::ShowLauncher));
+                        ui.close_menu();
+                    }
 
                     if ui.button("Exit").clicked() {
                         self.show_confirm_exit_window = true;

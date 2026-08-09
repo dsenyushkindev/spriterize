@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 
 mod bg;
+mod collection;
 mod error;
 mod files;
 mod graphics;

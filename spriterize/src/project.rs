@@ -20,9 +20,7 @@ const MAGIC: [u8; 5] = [0xfa, 0x1a, 0xfe, 0x1b, 0xf5];
 pub fn save(path: PathBuf, bytes: Vec<u8>) {
     use std::io::Write;
     let mut file = std::fs::File::create(path).unwrap();
-    let header = header();
-    file.write_all(&header).unwrap();
-    file.write_all(&bytes).unwrap();
+    file.write_all(&with_header(bytes)).unwrap();
 }
 
 pub fn load(path: PathBuf) -> Vec<u8> {
@@ -34,6 +32,14 @@ pub fn load(path: PathBuf) -> Vec<u8> {
     without_header(bytes)
 }
 
+/// Give an embedded project the same compatibility marker as a standalone
+/// `.spriterize` file.
+pub fn with_header(mut bytes: Vec<u8>) -> Vec<u8> {
+    let mut encoded = header();
+    encoded.append(&mut bytes);
+    encoded
+}
+
 fn header() -> Vec<u8> {
     let mut bytes = format!("spriterize {VERSION} ").into_bytes();
     bytes.append(&mut MAGIC.as_slice().to_owned());
@@ -41,7 +47,7 @@ fn header() -> Vec<u8> {
     bytes
 }
 
-fn without_header(mut bytes: Vec<u8>) -> Vec<u8> {
+pub fn without_header(mut bytes: Vec<u8>) -> Vec<u8> {
     let mut i = 0;
     let mut found = false;
     for win in bytes.windows(MAGIC.len()) {

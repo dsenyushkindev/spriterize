@@ -139,6 +139,29 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
         }
     }
 
+    /// Serialize the editable project without involving the filesystem.
+    /// Containers can use this to embed an ordinary project payload.
+    pub fn project_bytes(&self) -> Result<Vec<u8>> {
+        Ok(bincode::serialize(self)?)
+    }
+
+    /// Decode a project payload without filesystem callbacks. Useful for
+    /// read-only consumers such as collection exporters.
+    pub fn from_project_bytes(bytes: &[u8]) -> Result<Self> {
+        Ok(bincode::deserialize(bytes)?)
+    }
+
+    /// Replace this editor with an in-memory project, preserving the host's
+    /// load/save callbacks just like `Event::LoadProject` does.
+    pub fn load_project_bytes(&mut self, bytes: &[u8]) -> Result<CanvasEffect> {
+        let mut decoded = Self::from_project_bytes(bytes)?;
+        let (save_fn, load_fn) = (self.save_project_fn.take(), self.load_project_fn.take());
+        decoded.save_project_fn = save_fn;
+        decoded.load_project_fn = load_fn;
+        *self = decoded;
+        Ok(CanvasEffect::Layer)
+    }
+
     fn start_action(&mut self) {
         self.cur_reversal = Some(Action::default());
     }
@@ -360,7 +383,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::OpenFile(path) => self.import_image(path.to_string_lossy().as_ref())?,
             Event::SaveProject(path) => {
                 if let Some(f) = &self.save_project_fn {
-                    let bytes = bincode::serialize(&self)?;
+                    let bytes = self.project_bytes()?;
                     (f.0)(path, bytes);
                 } else {
                     eprintln!("Bug: Missing save project function");
@@ -369,11 +392,7 @@ impl<IMG: Bitmap + Serialize + for<'de> Deserialize<'de>> State<IMG> {
             Event::LoadProject(path) => {
                 if let Some(f) = &self.load_project_fn {
                     let bytes = (f.0)(path);
-                    let (save_fn, load_fn) =
-                        (self.save_project_fn.take(), self.load_project_fn.take());
-                    *self = bincode::deserialize(&bytes)?;
-                    self.save_project_fn = save_fn;
-                    self.load_project_fn = load_fn;
+                    self.load_project_bytes(&bytes)?;
                 } else {
                     eprintln!("Bug: Missing load project function");
                 }
