@@ -1,0 +1,13 @@
+[package]
+name = "artlib"
+version = "0.1.0"
+edition = "2021"
+description = "Procedural art engine: signed-distance fields, noise and compositing, ported from the Python artlib"
+license = "MIT/Apache-2.0"
+
+[dependencies]
+
+[dev-dependencies]
+# Only the tests need to decode the golden PNGs the Python reference emits; the
+# library itself carries no image dependency.
+image = "0.24.5"
