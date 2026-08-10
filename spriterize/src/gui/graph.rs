@@ -16,8 +16,8 @@ use crate::collection::ElementResource;
 use artlib::fields::Field;
 use artlib::raster::{self, Canvas, Rgba, Shader};
 use artlib::texture::{self, Grid};
-use egui_snarl::ui::{PinInfo, SnarlViewer};
-use egui_snarl::{InPin, InPinId, NodeId, OutPin, Snarl};
+use egui_snarl::ui::{AnyPins, PinInfo, SnarlViewer};
+use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use lapix::{
     GeneratorElementPort, GeneratorGraph, GeneratorGraphNode, GeneratorGraphWire,
     GeneratorNode as Node, GeneratorNoiseSource, GeneratorSocket, GeneratorWorleyFeature,
@@ -947,6 +947,7 @@ pub struct GraphViewer<'a> {
     pub previews: &'a mut GraphPreviewCache,
     pub preview_size: (usize, usize),
     pub show_previews: bool,
+    pub node_filter: &'a mut String,
 }
 
 pub struct GraphPreviewCache {
@@ -1069,15 +1070,20 @@ impl GraphPreviewCache {
     }
 }
 
-fn preview_frame(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+fn preview_frame(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(52, 52, 52))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(82, 82, 82)))
         .inner_margin(egui::Margin::same(3))
         .show(ui, |ui| {
-            ui.set_min_size(egui::vec2(112.0, 112.0));
-            contents(ui);
-        });
+            ui.allocate_ui_with_layout(
+                egui::vec2(112.0, 112.0),
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                contents,
+            );
+        })
+        .response
+        .rect
 }
 
 fn node_has_visual_preview(snarl: &Snarl<Node>, node: NodeId) -> bool {
@@ -1100,6 +1106,20 @@ fn node_has_visual_preview(snarl: &Snarl<Node>, node: NodeId) -> bool {
 impl SnarlViewer<Node> for GraphViewer<'_> {
     fn title(&mut self, node: &Node) -> String {
         node.title().to_owned()
+    }
+
+    fn show_header(
+        &mut self,
+        node: NodeId,
+        _inputs: &[InPin],
+        _outputs: &[OutPin],
+        ui: &mut egui::Ui,
+        _scale: f32,
+        snarl: &mut Snarl<Node>,
+    ) {
+        // Selectable labels claim pointer drags for text selection. A node
+        // title is a drag handle, not document text.
+        ui.add(egui::Label::new(snarl[node].title()).selectable(false));
     }
 
     fn inputs(&mut self, node: &Node) -> usize {
@@ -1192,8 +1212,22 @@ impl SnarlViewer<Node> for GraphViewer<'_> {
         _scale: f32,
         snarl: &mut Snarl<Node>,
     ) {
-        ui.label("Add node");
-        add_node_menu(pos, ui, snarl, self);
+        add_node_menu(pos, ui, snarl, self, None);
+    }
+
+    fn has_dropped_wire_menu(&mut self, _src_pins: AnyPins, _snarl: &mut Snarl<Node>) -> bool {
+        true
+    }
+
+    fn show_dropped_wire_menu(
+        &mut self,
+        pos: egui::Pos2,
+        ui: &mut egui::Ui,
+        _scale: f32,
+        src_pins: AnyPins,
+        snarl: &mut Snarl<Node>,
+    ) {
+        add_node_menu(pos, ui, snarl, self, Some(&src_pins));
     }
 
     fn has_node_menu(&mut self, _node: &Node) -> bool {
@@ -1426,83 +1460,263 @@ fn show_points(points: &mut Vec<[f32; 2]>, ui: &mut egui::Ui) {
     }
 }
 
+fn matches_node_filter(filter: &str, category: &str, label: &str) -> bool {
+    let aliases = match category {
+        "Texture sources" => "noise procedural",
+        "Texture operations" => "grid noise",
+        "Shaders" => "color colour material",
+        "Canvas" => "image raster paint",
+        "Parameters and values" => "input constant knob",
+        _ => "",
+    };
+    let haystack = format!("{category} {label} {aliases}").to_ascii_lowercase();
+    filter
+        .split_whitespace()
+        .all(|word| haystack.contains(word))
+}
+
+fn candidate_compatible(
+    candidate: &Node,
+    dropped: Option<&AnyPins<'_>>,
+    snarl: &Snarl<Node>,
+) -> bool {
+    match dropped {
+        None => true,
+        Some(AnyPins::Out(pins)) => pins.iter().any(|pin| {
+            snarl
+                .get_node(pin.node)
+                .and_then(|node| node.output(pin.output))
+                .is_some_and(|output| {
+                    candidate
+                        .inputs()
+                        .into_iter()
+                        .any(|input| sockets_compatible(output, input))
+                })
+        }),
+        Some(AnyPins::In(pins)) => pins.iter().any(|pin| {
+            snarl
+                .get_node(pin.node)
+                .and_then(|node| node.inputs().get(pin.input).copied())
+                .is_some_and(|input| {
+                    (0..candidate.outputs()).any(|output| {
+                        candidate
+                            .output(output)
+                            .is_some_and(|output| sockets_compatible(output, input))
+                    })
+                })
+        }),
+    }
+}
+
+fn insert_and_connect(
+    pos: egui::Pos2,
+    candidate: Node,
+    dropped: Option<&AnyPins<'_>>,
+    snarl: &mut Snarl<Node>,
+) -> NodeId {
+    let node = snarl.insert_node(pos, candidate);
+    let Some(dropped) = dropped else {
+        return node;
+    };
+
+    match dropped {
+        AnyPins::Out(pins) => {
+            let inputs = snarl[node].inputs();
+            let mut used_inputs = HashSet::new();
+            for source in *pins {
+                let Some(output) = snarl
+                    .get_node(source.node)
+                    .and_then(|source_node| source_node.output(source.output))
+                else {
+                    continue;
+                };
+                if let Some((input, _)) = inputs.iter().enumerate().find(|(input, socket)| {
+                    !used_inputs.contains(input) && sockets_compatible(output, **socket)
+                }) {
+                    used_inputs.insert(input);
+                    snarl.connect(*source, InPinId { node, input });
+                }
+            }
+        }
+        AnyPins::In(pins) => {
+            for target in *pins {
+                let Some(input) = snarl
+                    .get_node(target.node)
+                    .and_then(|target_node| target_node.inputs().get(target.input).copied())
+                else {
+                    continue;
+                };
+                if let Some(output) = (0..snarl[node].outputs()).find(|output| {
+                    snarl[node]
+                        .output(*output)
+                        .is_some_and(|output| sockets_compatible(output, input))
+                }) {
+                    snarl.drop_inputs(*target);
+                    snarl.connect(OutPinId { node, output }, *target);
+                }
+            }
+        }
+    }
+    node
+}
+
+fn node_category(
+    ui: &mut egui::Ui,
+    name: &str,
+    filter: &str,
+    contents: impl FnOnce(&mut egui::Ui),
+) {
+    if filter.is_empty() {
+        ui.menu_button(name, contents);
+    } else {
+        contents(ui);
+    }
+}
+
 fn add_node_menu(
     pos: egui::Pos2,
     ui: &mut egui::Ui,
     snarl: &mut Snarl<Node>,
-    viewer: &GraphViewer<'_>,
+    viewer: &mut GraphViewer<'_>,
+    dropped: Option<&AnyPins<'_>>,
 ) {
     type NodeFactory = fn() -> Node;
     fn entries(
         ui: &mut egui::Ui,
         pos: egui::Pos2,
         snarl: &mut Snarl<Node>,
+        category: &str,
+        filter: &str,
+        dropped: Option<&AnyPins<'_>>,
         values: &[(&str, NodeFactory)],
     ) {
         for (label, make) in values {
-            if ui.button(*label).clicked() {
-                snarl.insert_node(pos, make());
+            let candidate = make();
+            if !matches_node_filter(filter, category, label)
+                || !candidate_compatible(&candidate, dropped, snarl)
+            {
+                continue;
+            }
+            let text = if filter.trim().is_empty() {
+                (*label).to_owned()
+            } else {
+                format!("{label}  ·  {category}")
+            };
+            if ui.button(text).clicked() {
+                insert_and_connect(pos, candidate, dropped, snarl);
                 ui.close_menu();
             }
         }
     }
+
+    ui.horizontal(|ui| {
+        ui.label(if dropped.is_some() {
+            "Connect node"
+        } else {
+            "Add node"
+        });
+        let search = ui.add(
+            egui::TextEdit::singleline(viewer.node_filter)
+                .hint_text("Filter…")
+                .desired_width(150.0),
+        );
+        if ui.memory(|memory| memory.focused().is_none()) {
+            search.request_focus();
+        }
+        if !viewer.node_filter.is_empty() && ui.small_button("×").clicked() {
+            viewer.node_filter.clear();
+        }
+    });
+    let filter = viewer.node_filter.trim().to_ascii_lowercase();
+    let category_filter = if dropped.is_some() && filter.is_empty() {
+        "__flatten_wire_menu__"
+    } else {
+        filter.as_str()
+    };
     if !viewer.elements.is_empty() {
-        ui.menu_button("Reusable elements", |ui| {
+        node_category(ui, "Reusable elements", category_filter, |ui| {
             for element in viewer
                 .elements
                 .iter()
                 .filter(|element| viewer.defining_element != Some(element.id.as_str()))
             {
-                if ui.button(&element.name).clicked() {
-                    snarl.insert_node(
-                        pos,
-                        Node::ElementCall {
-                            element: element.id.clone(),
-                            name: element.name.clone(),
-                            inputs: element.inputs(),
-                            outputs: element.outputs(),
-                        },
-                    );
+                let candidate = Node::ElementCall {
+                    element: element.id.clone(),
+                    name: element.name.clone(),
+                    inputs: element.inputs(),
+                    outputs: element.outputs(),
+                };
+                if !matches_node_filter(&filter, "Reusable elements", &element.name)
+                    || !candidate_compatible(&candidate, dropped, snarl)
+                {
+                    continue;
+                }
+                let label = if filter.is_empty() {
+                    element.name.clone()
+                } else {
+                    format!("{}  ·  Reusable elements", element.name)
+                };
+                if ui.button(label).clicked() {
+                    insert_and_connect(pos, candidate, dropped, snarl);
                     ui.close_menu();
                 }
             }
         });
     }
     if viewer.defining_element.is_some() {
-        ui.menu_button("Element ports", |ui| {
-            if ui.button("Input").clicked() {
-                snarl.insert_node(
-                    pos,
-                    Node::ElementInput {
-                        port: GeneratorElementPort {
-                            id: "input".into(),
-                            name: "input".into(),
-                            socket: Socket::Shape,
-                        },
-                    },
-                );
+        node_category(ui, "Element ports", category_filter, |ui| {
+            let input_socket = match dropped {
+                Some(AnyPins::In(pins)) => pins
+                    .first()
+                    .and_then(|pin| snarl.get_node(pin.node)?.inputs().get(pin.input).copied())
+                    .unwrap_or(Socket::Shape),
+                _ => Socket::Shape,
+            };
+            let input = Node::ElementInput {
+                port: GeneratorElementPort {
+                    id: "input".into(),
+                    name: "input".into(),
+                    socket: input_socket,
+                },
+            };
+            if matches_node_filter(&filter, "Element ports", "Input")
+                && candidate_compatible(&input, dropped, snarl)
+                && ui.button("Input").clicked()
+            {
+                insert_and_connect(pos, input, dropped, snarl);
                 ui.close_menu();
             }
-            if ui.button("Output").clicked() {
-                snarl.insert_node(
-                    pos,
-                    Node::ElementOutput {
-                        port: GeneratorElementPort {
-                            id: "output".into(),
-                            name: "output".into(),
-                            socket: Socket::Shape,
-                        },
-                    },
-                );
+            let output_socket = match dropped {
+                Some(AnyPins::Out(pins)) => pins
+                    .first()
+                    .and_then(|pin| snarl.get_node(pin.node)?.output(pin.output))
+                    .unwrap_or(Socket::Shape),
+                _ => Socket::Shape,
+            };
+            let output = Node::ElementOutput {
+                port: GeneratorElementPort {
+                    id: "output".into(),
+                    name: "output".into(),
+                    socket: output_socket,
+                },
+            };
+            if matches_node_filter(&filter, "Element ports", "Output")
+                && candidate_compatible(&output, dropped, snarl)
+                && ui.button("Output").clicked()
+            {
+                insert_and_connect(pos, output, dropped, snarl);
                 ui.close_menu();
             }
         });
     }
-    ui.menu_button("Parameters and values", |ui| {
+    node_category(ui, "Parameters and values", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Parameters and values",
+            &filter,
+            dropped,
             &[
                 ("Number", || Node::Float { value: 0.0 }),
                 ("Integer", || Node::Int { value: 0 }),
@@ -1539,11 +1753,14 @@ fn add_node_menu(
             ],
         )
     });
-    ui.menu_button("Shapes", |ui| {
+    node_category(ui, "Shapes", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Shapes",
+            &filter,
+            dropped,
             &[
                 ("Disk", || Node::Disk {
                     cx: 32.0,
@@ -1615,11 +1832,14 @@ fn add_node_menu(
             ],
         )
     });
-    ui.menu_button("Shape operations", |ui| {
+    node_category(ui, "Shape operations", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Shape operations",
+            &filter,
+            dropped,
             &[
                 ("Union", || Node::Union),
                 ("Intersect", || Node::Intersect),
@@ -1654,11 +1874,14 @@ fn add_node_menu(
             ],
         )
     });
-    ui.menu_button("Field math", |ui| {
+    node_category(ui, "Field math", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Field math",
+            &filter,
+            dropped,
             &[
                 ("X coordinate", || Node::FieldX),
                 ("Y coordinate", || Node::FieldY),
@@ -1690,11 +1913,14 @@ fn add_node_menu(
             ],
         )
     });
-    ui.menu_button("Texture sources", |ui| {
+    node_category(ui, "Texture sources", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Texture sources",
+            &filter,
+            dropped,
             &[
                 ("Value noise", || Node::ValueNoise {
                     size: 0,
@@ -1741,11 +1967,14 @@ fn add_node_menu(
             ],
         )
     });
-    ui.menu_button("Texture operations", |ui| {
+    node_category(ui, "Texture operations", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Texture operations",
+            &filter,
+            dropped,
             &[
                 ("To field", || Node::GridToField),
                 ("Normalize", || Node::GridNormalize),
@@ -1786,11 +2015,14 @@ fn add_node_menu(
             ],
         )
     });
-    ui.menu_button("Shaders", |ui| {
+    node_category(ui, "Shaders", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Shaders",
+            &filter,
+            dropped,
             &[
                 ("Solid", || Node::Solid {
                     color: [220, 120, 60, 255],
@@ -1843,11 +2075,14 @@ fn add_node_menu(
             ],
         )
     });
-    ui.menu_button("Canvas", |ui| {
+    node_category(ui, "Canvas", category_filter, |ui| {
         entries(
             ui,
             pos,
             snarl,
+            "Canvas",
+            &filter,
+            dropped,
             &[
                 ("Paint", || Node::Paint {
                     antialias: true,
@@ -1858,8 +2093,13 @@ fn add_node_menu(
                 ("Modulate", || Node::Modulate),
             ],
         );
-        if viewer.defining_element.is_none() && ui.button("Output").clicked() {
-            snarl.insert_node(pos, Node::Output);
+        let output = Node::Output;
+        if viewer.defining_element.is_none()
+            && matches_node_filter(&filter, "Canvas", "Output")
+            && candidate_compatible(&output, dropped, snarl)
+            && ui.button("Output").clicked()
+        {
+            insert_and_connect(pos, output, dropped, snarl);
             ui.close_menu();
         }
     });
@@ -4315,5 +4555,91 @@ mod tests {
         let (preview, width, height) = downsample_preview(&pixels, 256, 64);
         assert_eq!((width, height), (128, 32));
         assert_eq!(preview.len(), width * height * 4);
+    }
+
+    #[test]
+    fn preview_frame_ignores_a_stale_tall_parent_rect() {
+        let context = egui::Context::default();
+        let mut preview_rect = egui::Rect::NOTHING;
+        let _ = context.run(egui::RawInput::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                ui.set_min_height(2_000.0);
+                preview_rect = preview_frame(ui, |_| {});
+            });
+        });
+        assert!(preview_rect.height() < 130.0, "{preview_rect:?}");
+    }
+
+    #[test]
+    fn dropping_from_an_input_filters_and_connects_a_producer() {
+        let mut graph = Snarl::new();
+        let hexagon = graph.insert_node(
+            pos(),
+            Node::Hexagon {
+                cx: 32.0,
+                cy: 32.0,
+                radius: 20.0,
+                flat_top: false,
+            },
+        );
+        let targets = [InPinId {
+            node: hexagon,
+            input: 3,
+        }];
+        let dropped = AnyPins::In(&targets);
+
+        assert!(candidate_compatible(
+            &Node::Bool { value: true },
+            Some(&dropped),
+            &graph
+        ));
+        assert!(!candidate_compatible(
+            &Node::Float { value: 1.0 },
+            Some(&dropped),
+            &graph
+        ));
+        let boolean = insert_and_connect(
+            pos(),
+            Node::Bool { value: true },
+            Some(&dropped),
+            &mut graph,
+        );
+        assert!(graph
+            .wires()
+            .any(|(from, to)| { from.node == boolean && from.output == 0 && to == targets[0] }));
+    }
+
+    #[test]
+    fn dropping_from_an_output_connects_a_compatible_consumer_input() {
+        let mut graph = Snarl::new();
+        let number = graph.insert_node(pos(), Node::Float { value: 12.0 });
+        let sources = [OutPinId {
+            node: number,
+            output: 0,
+        }];
+        let dropped = AnyPins::Out(&sources);
+        let disk = Node::Disk {
+            cx: 32.0,
+            cy: 32.0,
+            r: 16.0,
+        };
+        assert!(candidate_compatible(&disk, Some(&dropped), &graph));
+        assert!(!candidate_compatible(
+            &Node::Bool { value: true },
+            Some(&dropped),
+            &graph
+        ));
+
+        let disk = insert_and_connect(pos(), disk, Some(&dropped), &mut graph);
+        assert!(graph
+            .wires()
+            .any(|(from, to)| { from == sources[0] && to.node == disk && to.input == 0 }));
+    }
+
+    #[test]
+    fn node_palette_filter_matches_category_and_title_words() {
+        assert!(matches_node_filter("shape hex", "Shapes", "Hexagon"));
+        assert!(matches_node_filter("noise", "Texture sources", "Perlin"));
+        assert!(!matches_node_filter("canvas", "Shapes", "Hexagon"));
     }
 }

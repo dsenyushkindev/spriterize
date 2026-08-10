@@ -33,6 +33,7 @@ pub struct GeneratorWindow {
     canvas_size: (usize, usize),
     element_preview_size: (usize, usize),
     show_previews: bool,
+    node_filter: String,
 }
 
 enum Target {
@@ -52,6 +53,7 @@ impl GeneratorWindow {
             canvas_size: (64, 64),
             element_preview_size: (80, 80),
             show_previews: true,
+            node_filter: String::new(),
         }
     }
 
@@ -218,6 +220,7 @@ impl GeneratorWindow {
                             previews: &mut self.previews,
                             preview_size,
                             show_previews: self.show_previews,
+                            node_filter: &mut self.node_filter,
                         };
                         graph.show(
                             &mut viewer,
