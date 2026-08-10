@@ -12,14 +12,15 @@
 //! values on demand. The interactive editor (a `SnarlViewer`) and the per-layer
 //! window are built on top of this.
 
+use crate::collection::ElementResource;
 use artlib::fields::Field;
 use artlib::raster::{self, Canvas, Rgba, Shader};
 use artlib::texture::{self, Grid};
 use egui_snarl::ui::{PinInfo, SnarlViewer};
 use egui_snarl::{InPin, InPinId, NodeId, OutPin, Snarl};
 use lapix::{
-    GeneratorGraph, GeneratorGraphNode, GeneratorGraphWire, GeneratorNode as Node,
-    GeneratorNoiseSource, GeneratorWorleyFeature,
+    GeneratorElementPort, GeneratorGraph, GeneratorGraphNode, GeneratorGraphWire,
+    GeneratorNode as Node, GeneratorNoiseSource, GeneratorSocket, GeneratorWorleyFeature,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -37,28 +38,27 @@ pub enum KnobValue {
 
 /// What a wire carries — used both to type-check the evaluator and (later) to
 /// colour the editor's pins and refuse mismatched connections.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Socket {
-    Float,
-    Int,
-    Color,
-    Bool,
-    Shape,
-    Grid,
-    Shader,
-    Canvas,
-}
+pub type Socket = GeneratorSocket;
 
 trait NodeExt {
-    fn title(&self) -> &'static str;
-    fn inputs(&self) -> &'static [Socket];
-    fn input_label(&self, index: usize) -> Option<&'static str>;
-    fn output(&self) -> Option<Socket>;
+    fn title(&self) -> &str;
+    fn inputs(&self) -> Vec<Socket>;
+    fn input_label(&self, index: usize) -> Option<&str>;
+    fn output(&self, index: usize) -> Option<Socket>;
+    fn outputs(&self) -> usize;
 }
 
 impl NodeExt for Node {
-    fn title(&self) -> &'static str {
+    fn title(&self) -> &str {
         match self {
+            Node::ElementCall { name, .. } => name,
+            Node::ElementInput { .. } => "Element input",
+            Node::ElementOutput { .. } => "Element output",
+            Node::FloatAdd => "Number add",
+            Node::FloatSubtract => "Number subtract",
+            Node::FloatMultiply => "Number multiply",
+            Node::FloatDivide => "Number divide",
+            Node::FloatToField => "Number to field",
             Node::Float { .. } => "Number",
             Node::Int { .. } => "Integer",
             Node::Bool { .. } => "Boolean",
@@ -154,8 +154,18 @@ impl NodeExt for Node {
         }
     }
 
-    fn inputs(&self) -> &'static [Socket] {
-        match self {
+    fn inputs(&self) -> Vec<Socket> {
+        if let Node::ElementCall { inputs, .. } = self {
+            return inputs.iter().map(|port| port.socket).collect();
+        }
+        let sockets: &[Socket] = match self {
+            Node::ElementInput { .. } => &[],
+            Node::ElementOutput { port } => std::slice::from_ref(&port.socket),
+            Node::ElementCall { .. } => unreachable!(),
+            Node::FloatAdd | Node::FloatSubtract | Node::FloatMultiply | Node::FloatDivide => {
+                &[Socket::Float, Socket::Float]
+            }
+            Node::FloatToField => &[Socket::Float],
             Node::Float { .. }
             | Node::Int { .. }
             | Node::Bool { .. }
@@ -302,12 +312,25 @@ impl NodeExt for Node {
             Node::Fill => &[Socket::Canvas, Socket::Shader],
             Node::Modulate => &[Socket::Canvas, Socket::Shape, Socket::Shape],
             Node::Output => &[Socket::Canvas],
-        }
+        };
+        sockets.to_vec()
     }
 
     /// The label of an input socket, in the same order as [`Node::inputs`].
-    fn input_label(&self, index: usize) -> Option<&'static str> {
+    fn input_label(&self, index: usize) -> Option<&str> {
+        if let Node::ElementCall { inputs, .. } = self {
+            return inputs.get(index).map(|port| port.name.as_str());
+        }
+        if let Node::ElementOutput { port } = self {
+            return (index == 0).then_some(port.name.as_str());
+        }
         let labels: &[&str] = match self {
+            Node::ElementInput { .. } => &[],
+            Node::ElementCall { .. } | Node::ElementOutput { .. } => unreachable!(),
+            Node::FloatAdd | Node::FloatSubtract | Node::FloatMultiply | Node::FloatDivide => {
+                &["a", "b"]
+            }
+            Node::FloatToField => &["number"],
             Node::Float { .. }
             | Node::Int { .. }
             | Node::Bool { .. }
@@ -400,8 +423,23 @@ impl NodeExt for Node {
     }
 
     /// The type of the output socket, if the node has one.
-    fn output(&self) -> Option<Socket> {
+    fn output(&self, index: usize) -> Option<Socket> {
+        if let Node::ElementCall { outputs, .. } = self {
+            return outputs.get(index).map(|port| port.socket);
+        }
+        if let Node::ElementInput { port } = self {
+            return (index == 0).then_some(port.socket);
+        }
+        if index != 0 {
+            return None;
+        }
         match self {
+            Node::ElementCall { .. } | Node::ElementInput { .. } => unreachable!(),
+            Node::ElementOutput { .. } => None,
+            Node::FloatAdd | Node::FloatSubtract | Node::FloatMultiply | Node::FloatDivide => {
+                Some(Socket::Float)
+            }
+            Node::FloatToField => Some(Socket::Shape),
             Node::FloatKnob { .. } | Node::Float { .. } => Some(Socket::Float),
             Node::IntKnob { .. } | Node::Int { .. } => Some(Socket::Int),
             Node::ColorKnob { .. }
@@ -492,6 +530,14 @@ impl NodeExt for Node {
             Node::Output => None,
         }
     }
+
+    fn outputs(&self) -> usize {
+        match self {
+            Node::ElementCall { outputs, .. } => outputs.len(),
+            Node::ElementInput { .. } => 1,
+            _ => usize::from(self.output(0).is_some()),
+        }
+    }
 }
 
 /// A value produced while evaluating the graph.
@@ -550,7 +596,7 @@ pub fn from_recipe(recipe: &GeneratorGraph) -> Result<Snarl<Node>, String> {
             .ok_or_else(|| format!("wire ends at missing node {}", wire.to_node))?;
         let source = &snarl[from];
         let target = &snarl[to];
-        let Some(output_socket) = source.output().filter(|_| wire.from_output == 0) else {
+        let Some(output_socket) = source.output(wire.from_output) else {
             return Err(format!(
                 "{} has no output {}",
                 source.title(),
@@ -577,6 +623,244 @@ pub fn from_recipe(recipe: &GeneratorGraph) -> Result<Snarl<Node>, String> {
         );
     }
     Ok(snarl)
+}
+
+/// Expand collection-owned element calls into an ordinary graph for
+/// evaluation. The stored caller graph stays compact and continues referring
+/// to the shared definition.
+pub fn expand_elements(
+    recipe: &GeneratorGraph,
+    elements: &[ElementResource],
+) -> Result<GeneratorGraph, String> {
+    expand_elements_inner(recipe, elements, &mut Vec::new())
+}
+
+fn expand_elements_inner(
+    recipe: &GeneratorGraph,
+    elements: &[ElementResource],
+    stack: &mut Vec<String>,
+) -> Result<GeneratorGraph, String> {
+    let Some(call_node) = recipe
+        .nodes
+        .iter()
+        .find(|node| matches!(node.node, Node::ElementCall { .. }))
+    else {
+        return Ok(recipe.clone());
+    };
+    let Node::ElementCall {
+        element,
+        inputs,
+        outputs,
+        ..
+    } = &call_node.node
+    else {
+        unreachable!()
+    };
+    if stack.contains(element) {
+        stack.push(element.clone());
+        return Err(format!("recursive element call: {}", stack.join(" -> ")));
+    }
+    let definition = elements
+        .iter()
+        .find(|candidate| candidate.id == *element)
+        .ok_or_else(|| format!("missing element `{element}`"))?;
+    stack.push(element.clone());
+    let body = expand_elements_inner(&definition.graph, elements, stack)?;
+    stack.pop();
+
+    let actual_inputs = definition.inputs();
+    let actual_outputs = definition.outputs();
+    validate_call_ports(element, "input", inputs, &actual_inputs)?;
+    validate_call_ports(element, "output", outputs, &actual_outputs)?;
+
+    let mut next_id = recipe.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
+    let mut mapped = HashMap::new();
+    let mut nodes: Vec<_> = recipe
+        .nodes
+        .iter()
+        .filter(|node| node.id != call_node.id)
+        .cloned()
+        .collect();
+    for node in &body.nodes {
+        if matches!(
+            node.node,
+            Node::ElementInput { .. } | Node::ElementOutput { .. }
+        ) {
+            continue;
+        }
+        mapped.insert(node.id, next_id);
+        let mut cloned = node.clone();
+        cloned.id = next_id;
+        cloned.position[0] += call_node.position[0];
+        cloned.position[1] += call_node.position[1];
+        next_id += 1;
+        nodes.push(cloned);
+    }
+
+    let call_inputs: HashMap<_, _> = inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, port)| {
+            recipe
+                .wires
+                .iter()
+                .find(|wire| wire.to_node == call_node.id && wire.to_input == index)
+                .map(|wire| (port.id.as_str(), (wire.from_node, wire.from_output)))
+        })
+        .collect();
+    let mut call_outputs: HashMap<&str, Vec<(u64, usize)>> = HashMap::new();
+    for (index, port) in outputs.iter().enumerate() {
+        for wire in recipe
+            .wires
+            .iter()
+            .filter(|wire| wire.from_node == call_node.id && wire.from_output == index)
+        {
+            call_outputs
+                .entry(port.id.as_str())
+                .or_default()
+                .push((wire.to_node, wire.to_input));
+        }
+    }
+
+    let node_by_id: HashMap<_, _> = body
+        .nodes
+        .iter()
+        .map(|node| (node.id, &node.node))
+        .collect();
+    let mut wires: Vec<_> = recipe
+        .wires
+        .iter()
+        .filter(|wire| wire.from_node != call_node.id && wire.to_node != call_node.id)
+        .cloned()
+        .collect();
+    for wire in &body.wires {
+        let source = node_by_id
+            .get(&wire.from_node)
+            .ok_or_else(|| format!("element `{element}` has a wire from a missing node"))?;
+        let target = node_by_id
+            .get(&wire.to_node)
+            .ok_or_else(|| format!("element `{element}` has a wire to a missing node"))?;
+        match (source, target) {
+            (Node::ElementInput { port: input }, Node::ElementOutput { port: output }) => {
+                if let Some(&(from_node, from_output)) = call_inputs.get(input.id.as_str()) {
+                    for &(to_node, to_input) in
+                        call_outputs.get(output.id.as_str()).into_iter().flatten()
+                    {
+                        wires.push(GeneratorGraphWire {
+                            from_node,
+                            from_output,
+                            to_node,
+                            to_input,
+                        });
+                    }
+                }
+            }
+            (Node::ElementInput { port }, _) => {
+                if let Some(&(from_node, from_output)) = call_inputs.get(port.id.as_str()) {
+                    wires.push(GeneratorGraphWire {
+                        from_node,
+                        from_output,
+                        to_node: mapped[&wire.to_node],
+                        to_input: wire.to_input,
+                    });
+                }
+            }
+            (_, Node::ElementOutput { port }) => {
+                for &(to_node, to_input) in call_outputs.get(port.id.as_str()).into_iter().flatten()
+                {
+                    wires.push(GeneratorGraphWire {
+                        from_node: mapped[&wire.from_node],
+                        from_output: wire.from_output,
+                        to_node,
+                        to_input,
+                    });
+                }
+            }
+            (Node::ElementOutput { .. }, _) | (_, Node::ElementInput { .. }) => {
+                return Err(format!(
+                    "element `{element}` has a boundary port wired backwards"
+                ));
+            }
+            _ => wires.push(GeneratorGraphWire {
+                from_node: mapped[&wire.from_node],
+                from_output: wire.from_output,
+                to_node: mapped[&wire.to_node],
+                to_input: wire.to_input,
+            }),
+        }
+    }
+    expand_elements_inner(&GeneratorGraph { nodes, wires }, elements, stack)
+}
+
+fn validate_call_ports(
+    element: &str,
+    kind: &str,
+    held: &[GeneratorElementPort],
+    actual: &[GeneratorElementPort],
+) -> Result<(), String> {
+    for port in held {
+        let Some(current) = actual.iter().find(|current| current.id == port.id) else {
+            return Err(format!(
+                "element `{element}` no longer has {kind} `{}`",
+                port.name
+            ));
+        };
+        if current.socket != port.socket {
+            return Err(format!(
+                "element `{element}` changed the type of {kind} `{}`",
+                port.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Update every call site's port snapshot after an element is edited, keeping
+/// wires attached by stable port id rather than by their old visual index.
+pub fn refresh_element_calls(recipe: &mut GeneratorGraph, element: &ElementResource) {
+    let next_inputs = element.inputs();
+    let next_outputs = element.outputs();
+    for node in &mut recipe.nodes {
+        let Node::ElementCall {
+            element: id,
+            name,
+            inputs,
+            outputs,
+        } = &mut node.node
+        else {
+            continue;
+        };
+        if id != &element.id {
+            continue;
+        }
+        let old_inputs = inputs.clone();
+        let old_outputs = outputs.clone();
+        let node_id = node.id;
+        recipe.wires.retain_mut(|wire| {
+            if wire.to_node == node_id {
+                let Some(old) = old_inputs.get(wire.to_input) else {
+                    return false;
+                };
+                let Some(index) = next_inputs.iter().position(|port| port.id == old.id) else {
+                    return false;
+                };
+                wire.to_input = index;
+            }
+            if wire.from_node == node_id {
+                let Some(old) = old_outputs.get(wire.from_output) else {
+                    return false;
+                };
+                let Some(index) = next_outputs.iter().position(|port| port.id == old.id) else {
+                    return false;
+                };
+                wire.from_output = index;
+            }
+            true
+        });
+        *name = element.name.clone();
+        *inputs = next_inputs.clone();
+        *outputs = next_outputs.clone();
+    }
 }
 
 pub fn default_recipe() -> GeneratorGraph {
@@ -655,10 +939,165 @@ pub fn default_recipe() -> GeneratorGraph {
     to_recipe(&snarl)
 }
 
-pub struct GraphViewer;
+pub struct GraphViewer<'a> {
+    pub elements: &'a [ElementResource],
+    /// Element definitions may declare boundary ports; ordinary generator
+    /// graphs may only call elements.
+    pub defining_element: Option<&'a str>,
+    pub previews: &'a mut GraphPreviewCache,
+    pub preview_size: (usize, usize),
+    pub show_previews: bool,
+}
+
+pub struct GraphPreviewCache {
+    graph: Option<GeneratorGraph>,
+    entries: HashMap<u64, PreviewEntry>,
+    remaining_this_frame: usize,
+}
+
+enum PreviewEntry {
+    Image {
+        texture: egui::TextureHandle,
+        size: egui::Vec2,
+    },
+    Error(String),
+}
+
+impl GraphPreviewCache {
+    pub fn new() -> Self {
+        Self {
+            graph: None,
+            entries: HashMap::new(),
+            remaining_this_frame: 0,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.graph = None;
+        self.entries.clear();
+        self.remaining_this_frame = 0;
+    }
+
+    pub fn prepare(&mut self, graph: &Snarl<Node>) {
+        let next = to_recipe(graph);
+        let unchanged = self.graph.as_ref().is_some_and(|previous| {
+            previous.wires == next.wires
+                && previous.nodes.len() == next.nodes.len()
+                && previous
+                    .nodes
+                    .iter()
+                    .zip(&next.nodes)
+                    .all(|(a, b)| a.id == b.id && a.node == b.node)
+        });
+        if !unchanged {
+            self.entries.clear();
+            self.graph = Some(next);
+        }
+        // Some imported graphs contain scores of visual nodes. Populate a
+        // couple of thumbnails per frame so opening the editor stays smooth.
+        self.remaining_this_frame = 2;
+    }
+
+    fn show(
+        &mut self,
+        node: NodeId,
+        snarl: &Snarl<Node>,
+        elements: &[ElementResource],
+        canvas_size: (usize, usize),
+        ui: &mut egui::Ui,
+    ) {
+        if !node_has_visual_preview(snarl, node) {
+            return;
+        }
+        let key = node.0 as u64;
+        if !self.entries.contains_key(&key) {
+            if self.remaining_this_frame == 0 {
+                preview_frame(ui, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.weak("rendering…");
+                    });
+                });
+                ui.ctx().request_repaint();
+                return;
+            }
+            self.remaining_this_frame -= 1;
+            let entry = match preview_pixels(snarl, node, elements, canvas_size.0, canvas_size.1) {
+                Ok(Some((pixels, width, height))) => {
+                    let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &pixels);
+                    let texture = ui.ctx().load_texture(
+                        format!("generator-node-preview-{key}"),
+                        image,
+                        egui::TextureOptions::NEAREST,
+                    );
+                    // Pixel art should be enlarged, not shown at one UI point
+                    // per source pixel. Always fill a legible thumbnail.
+                    let scale = 112.0 / width.max(height) as f32;
+                    PreviewEntry::Image {
+                        texture,
+                        size: egui::vec2(width as f32 * scale, height as f32 * scale),
+                    }
+                }
+                Ok(None) => return,
+                Err(error) => PreviewEntry::Error(error),
+            };
+            self.entries.insert(key, entry);
+        }
+
+        match &self.entries[&key] {
+            PreviewEntry::Image { texture, size } => {
+                preview_frame(ui, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.add(
+                            egui::Image::new(egui::load::SizedTexture::new(texture.id(), *size))
+                                .bg_fill(egui::Color32::from_rgb(52, 52, 52)),
+                        );
+                    });
+                });
+            }
+            PreviewEntry::Error(error) => {
+                preview_frame(ui, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 95, 95),
+                            "preview unavailable",
+                        )
+                        .on_hover_text(error);
+                    });
+                });
+            }
+        }
+    }
+}
+
+fn preview_frame(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(52, 52, 52))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(82, 82, 82)))
+        .inner_margin(egui::Margin::same(3))
+        .show(ui, |ui| {
+            ui.set_min_size(egui::vec2(112.0, 112.0));
+            contents(ui);
+        });
+}
+
+fn node_has_visual_preview(snarl: &Snarl<Node>, node: NodeId) -> bool {
+    if matches!(&snarl[node], Node::Output) {
+        return true;
+    }
+    if matches!(&snarl[node], Node::ElementOutput { .. }) {
+        return snarl.wires().any(|(from, to)| {
+            to.node == node
+                && to.input == 0
+                && snarl[from.node]
+                    .output(from.output)
+                    .is_some_and(visual_socket)
+        });
+    }
+    (0..snarl[node].outputs()).any(|output| snarl[node].output(output).is_some_and(visual_socket))
+}
 
 #[allow(refining_impl_trait)]
-impl SnarlViewer<Node> for GraphViewer {
+impl SnarlViewer<Node> for GraphViewer<'_> {
     fn title(&mut self, node: &Node) -> String {
         node.title().to_owned()
     }
@@ -668,7 +1107,7 @@ impl SnarlViewer<Node> for GraphViewer {
     }
 
     fn outputs(&mut self, node: &Node) -> usize {
-        usize::from(node.output().is_some())
+        node.outputs()
     }
 
     fn show_input(
@@ -691,13 +1130,22 @@ impl SnarlViewer<Node> for GraphViewer {
         _scale: f32,
         snarl: &mut Snarl<Node>,
     ) -> PinInfo {
-        let socket = snarl[pin.id.node].output().expect("output pin exists");
-        ui.label(socket_name(socket));
+        let node = &snarl[pin.id.node];
+        let socket = node.output(pin.id.output).expect("output pin exists");
+        let label = match node {
+            Node::ElementCall { outputs, .. } => outputs
+                .get(pin.id.output)
+                .map(|port| port.name.as_str())
+                .unwrap_or("output"),
+            Node::ElementInput { port } => port.name.as_str(),
+            _ => socket_name(socket),
+        };
+        ui.label(label);
         pin_info(socket)
     }
 
     fn has_body(&mut self, node: &Node) -> bool {
-        !matches!(node, Node::Union | Node::Output)
+        node.outputs() != 0 || matches!(node, Node::Output | Node::ElementOutput { .. })
     }
 
     fn show_body(
@@ -709,11 +1157,17 @@ impl SnarlViewer<Node> for GraphViewer {
         _scale: f32,
         snarl: &mut Snarl<Node>,
     ) {
-        show_node_properties(&mut snarl[node], ui);
+        ui.vertical(|ui| {
+            show_node_properties(&mut snarl[node], ui);
+            if self.show_previews {
+                self.previews
+                    .show(node, snarl, self.elements, self.preview_size, ui);
+            }
+        });
     }
 
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<Node>) {
-        let Some(output) = snarl[from.id.node].output() else {
+        let Some(output) = snarl[from.id.node].output(from.id.output) else {
             return;
         };
         let Some(&input) = snarl[to.id.node].inputs().get(to.id.input) else {
@@ -739,7 +1193,7 @@ impl SnarlViewer<Node> for GraphViewer {
         snarl: &mut Snarl<Node>,
     ) {
         ui.label("Add node");
-        add_node_menu(pos, ui, snarl);
+        add_node_menu(pos, ui, snarl, self);
     }
 
     fn has_node_menu(&mut self, _node: &Node) -> bool {
@@ -791,6 +1245,14 @@ fn socket_name(socket: Socket) -> &'static str {
 
 fn show_node_properties(node: &mut Node, ui: &mut egui::Ui) {
     match node {
+        Node::ElementCall { element, .. } => {
+            ui.weak(format!("shared: {element}"));
+        }
+        Node::ElementInput { port } | Node::ElementOutput { port } => {
+            ui.text_edit_singleline(&mut port.name);
+            ui.text_edit_singleline(&mut port.id);
+            socket_picker(ui, &mut port.socket);
+        }
         Node::Float { value } => {
             ui.add(egui::DragValue::new(value));
         }
@@ -925,6 +1387,25 @@ fn show_node_properties(node: &mut Node, ui: &mut egui::Ui) {
     }
 }
 
+fn socket_picker(ui: &mut egui::Ui, socket: &mut Socket) {
+    egui::ComboBox::from_label("type")
+        .selected_text(socket_name(*socket))
+        .show_ui(ui, |ui| {
+            for candidate in [
+                Socket::Float,
+                Socket::Int,
+                Socket::Color,
+                Socket::Bool,
+                Socket::Shape,
+                Socket::Grid,
+                Socket::Shader,
+                Socket::Canvas,
+            ] {
+                ui.selectable_value(socket, candidate, socket_name(candidate));
+            }
+        });
+}
+
 fn show_points(points: &mut Vec<[f32; 2]>, ui: &mut egui::Ui) {
     let mut remove = None;
     for (index, point) in points.iter_mut().enumerate() {
@@ -945,7 +1426,12 @@ fn show_points(points: &mut Vec<[f32; 2]>, ui: &mut egui::Ui) {
     }
 }
 
-fn add_node_menu(pos: egui::Pos2, ui: &mut egui::Ui, snarl: &mut Snarl<Node>) {
+fn add_node_menu(
+    pos: egui::Pos2,
+    ui: &mut egui::Ui,
+    snarl: &mut Snarl<Node>,
+    viewer: &GraphViewer<'_>,
+) {
     type NodeFactory = fn() -> Node;
     fn entries(
         ui: &mut egui::Ui,
@@ -959,6 +1445,58 @@ fn add_node_menu(pos: egui::Pos2, ui: &mut egui::Ui, snarl: &mut Snarl<Node>) {
                 ui.close_menu();
             }
         }
+    }
+    if !viewer.elements.is_empty() {
+        ui.menu_button("Reusable elements", |ui| {
+            for element in viewer
+                .elements
+                .iter()
+                .filter(|element| viewer.defining_element != Some(element.id.as_str()))
+            {
+                if ui.button(&element.name).clicked() {
+                    snarl.insert_node(
+                        pos,
+                        Node::ElementCall {
+                            element: element.id.clone(),
+                            name: element.name.clone(),
+                            inputs: element.inputs(),
+                            outputs: element.outputs(),
+                        },
+                    );
+                    ui.close_menu();
+                }
+            }
+        });
+    }
+    if viewer.defining_element.is_some() {
+        ui.menu_button("Element ports", |ui| {
+            if ui.button("Input").clicked() {
+                snarl.insert_node(
+                    pos,
+                    Node::ElementInput {
+                        port: GeneratorElementPort {
+                            id: "input".into(),
+                            name: "input".into(),
+                            socket: Socket::Shape,
+                        },
+                    },
+                );
+                ui.close_menu();
+            }
+            if ui.button("Output").clicked() {
+                snarl.insert_node(
+                    pos,
+                    Node::ElementOutput {
+                        port: GeneratorElementPort {
+                            id: "output".into(),
+                            name: "output".into(),
+                            socket: Socket::Shape,
+                        },
+                    },
+                );
+                ui.close_menu();
+            }
+        });
     }
     ui.menu_button("Parameters and values", |ui| {
         entries(
@@ -993,6 +1531,11 @@ fn add_node_menu(pos: egui::Pos2, ui: &mut egui::Ui, snarl: &mut Snarl<Node>) {
                 ("Set alpha", || Node::AlphaColor { alpha: 255 }),
                 ("Shade color", || Node::ShadeColor { factor: 1.0 }),
                 ("Mix colors", || Node::MixColor { amount: 0.5 }),
+                ("Add numbers", || Node::FloatAdd),
+                ("Subtract numbers", || Node::FloatSubtract),
+                ("Multiply numbers", || Node::FloatMultiply),
+                ("Divide numbers", || Node::FloatDivide),
+                ("Number to field", || Node::FloatToField),
             ],
         )
     });
@@ -1313,10 +1856,289 @@ fn add_node_menu(pos: egui::Pos2, ui: &mut egui::Ui, snarl: &mut Snarl<Node>) {
                 ("Stamp", || Node::Stamp { antialias: false }),
                 ("Fill", || Node::Fill),
                 ("Modulate", || Node::Modulate),
-                ("Output", || Node::Output),
             ],
-        )
+        );
+        if viewer.defining_element.is_none() && ui.button("Output").clicked() {
+            snarl.insert_node(pos, Node::Output);
+            ui.close_menu();
+        }
     });
+}
+
+/// Render the selected node's visual output through the same evaluator used by
+/// the finished generator. A small probe tail is added to a temporary recipe;
+/// this also lets element calls expand normally before evaluation.
+fn preview_pixels(
+    snarl: &Snarl<Node>,
+    displayed_node: NodeId,
+    elements: &[ElementResource],
+    w: usize,
+    h: usize,
+) -> Result<Option<(Vec<u8>, usize, usize)>, String> {
+    // Elements can be opened before a project provides meaningful dimensions.
+    // A 1x1 evaluator canvas turns every result into a single swatch.
+    let (w, h) = if w <= 2 && h <= 2 {
+        (96, 96)
+    } else {
+        (w.max(1), h.max(1))
+    };
+    if matches!(&snarl[displayed_node], Node::Output) {
+        let expanded = expand_elements(&to_recipe(snarl), elements)?;
+        let pixels = evaluate(&from_recipe(&expanded)?, w, h)?;
+        return Ok(Some(downsample_preview(&pixels, w, h)));
+    }
+
+    let (source, output, socket) = if let Node::ElementOutput { .. } = &snarl[displayed_node] {
+        let Some((from, _)) = snarl
+            .wires()
+            .find(|(_, to)| to.node == displayed_node && to.input == 0)
+        else {
+            return Ok(None);
+        };
+        let Some(socket) = snarl[from.node].output(from.output) else {
+            return Ok(None);
+        };
+        (from.node, from.output, socket)
+    } else {
+        let Some((output, socket)) = (0..snarl[displayed_node].outputs())
+            .filter_map(|output| {
+                snarl[displayed_node]
+                    .output(output)
+                    .map(|socket| (output, socket))
+            })
+            .find(|(_, socket)| visual_socket(*socket))
+        else {
+            return Ok(None);
+        };
+        (displayed_node, output, socket)
+    };
+
+    let mut recipe = to_recipe(snarl);
+    let output_ids: HashSet<_> = recipe
+        .nodes
+        .iter()
+        .filter(|held| matches!(held.node, Node::Output))
+        .map(|held| held.id)
+        .collect();
+    recipe.nodes.retain(|held| !output_ids.contains(&held.id));
+    recipe.wires.retain(|wire| {
+        !output_ids.contains(&wire.from_node) && !output_ids.contains(&wire.to_node)
+    });
+
+    let mut next_id = recipe.nodes.iter().map(|held| held.id).max().unwrap_or(0) + 1;
+    install_preview_element_inputs(&mut recipe, &mut next_id, w, h);
+    let source_id = source.0 as u64;
+    let mut add_node = |recipe: &mut GeneratorGraph, node: Node| {
+        let id = next_id;
+        next_id += 1;
+        recipe.nodes.push(GeneratorGraphNode {
+            id,
+            position: [0.0, 0.0],
+            node,
+        });
+        id
+    };
+    let wire = |recipe: &mut GeneratorGraph,
+                from_node: u64,
+                from_output: usize,
+                to_node: u64,
+                to_input: usize| {
+        recipe.wires.push(GeneratorGraphWire {
+            from_node,
+            from_output,
+            to_node,
+            to_input,
+        });
+    };
+
+    let canvas = match socket {
+        Socket::Canvas => source_id,
+        Socket::Shape => {
+            let shader = add_node(
+                &mut recipe,
+                Node::Solid {
+                    color: [235, 235, 235, 255],
+                },
+            );
+            let paint = add_node(
+                &mut recipe,
+                Node::Paint {
+                    antialias: true,
+                    opacity: 1.0,
+                },
+            );
+            wire(&mut recipe, source_id, output, paint, 1);
+            wire(&mut recipe, shader, 0, paint, 2);
+            paint
+        }
+        Socket::Grid => {
+            let shader = add_node(
+                &mut recipe,
+                Node::FromGrid {
+                    low: [0, 0, 0, 255],
+                    high: [255, 255, 255, 255],
+                    lo: 0.0,
+                    hi: 1.0,
+                },
+            );
+            let fill = add_node(&mut recipe, Node::Fill);
+            wire(&mut recipe, source_id, output, shader, 0);
+            wire(&mut recipe, shader, 0, fill, 1);
+            fill
+        }
+        Socket::Shader => {
+            let fill = add_node(&mut recipe, Node::Fill);
+            wire(&mut recipe, source_id, output, fill, 1);
+            fill
+        }
+        Socket::Color => {
+            let shader = add_node(
+                &mut recipe,
+                Node::Solid {
+                    color: [255, 255, 255, 255],
+                },
+            );
+            let fill = add_node(&mut recipe, Node::Fill);
+            wire(&mut recipe, source_id, output, shader, 0);
+            wire(&mut recipe, shader, 0, fill, 1);
+            fill
+        }
+        Socket::Float | Socket::Int | Socket::Bool => return Ok(None),
+    };
+    let final_output = add_node(&mut recipe, Node::Output);
+    wire(&mut recipe, canvas, 0, final_output, 0);
+
+    let expanded = expand_elements(&recipe, elements)?;
+    let pixels = evaluate(&from_recipe(&expanded)?, w, h)?;
+    Ok(Some(downsample_preview(&pixels, w, h)))
+}
+
+fn visual_socket(socket: Socket) -> bool {
+    matches!(
+        socket,
+        Socket::Color | Socket::Shape | Socket::Grid | Socket::Shader | Socket::Canvas
+    )
+}
+
+/// Element definitions do not have caller values while they are edited. Give
+/// their public inputs neutral, transient values so downstream previews can be
+/// evaluated without changing the saved graph.
+fn install_preview_element_inputs(
+    recipe: &mut GeneratorGraph,
+    next_id: &mut u64,
+    width: usize,
+    height: usize,
+) {
+    let canvas_inputs: Vec<_> = recipe
+        .nodes
+        .iter_mut()
+        .filter_map(|held| {
+            let Node::ElementInput { port } = &held.node else {
+                return None;
+            };
+            let socket = port.socket;
+            let name = port.name.trim().to_ascii_lowercase();
+            held.node = match socket {
+                Socket::Float => Node::Float {
+                    value: preview_float(&name, width, height),
+                },
+                Socket::Int => Node::Int {
+                    value: if name.contains("count") { 6 } else { 1 },
+                },
+                Socket::Color => Node::Color {
+                    value: if name.contains("low") || name.contains("outer") {
+                        [45, 55, 70, 255]
+                    } else {
+                        [205, 215, 225, 255]
+                    },
+                },
+                Socket::Bool => Node::Bool { value: false },
+                Socket::Shape => Node::Everywhere,
+                Socket::Grid => Node::ConstantGrid {
+                    size: 0,
+                    value: 0.5,
+                },
+                Socket::Shader => Node::Solid {
+                    color: [200, 200, 200, 255],
+                },
+                Socket::Canvas => Node::Paint {
+                    antialias: false,
+                    opacity: 1.0,
+                },
+            };
+            (socket == Socket::Canvas).then_some(held.id)
+        })
+        .collect();
+
+    for input in canvas_inputs {
+        let shape = *next_id;
+        *next_id += 1;
+        let shader = *next_id;
+        *next_id += 1;
+        recipe.nodes.push(GeneratorGraphNode {
+            id: shape,
+            position: [0.0, 0.0],
+            node: Node::Everywhere,
+        });
+        recipe.nodes.push(GeneratorGraphNode {
+            id: shader,
+            position: [0.0, 0.0],
+            node: Node::Solid {
+                // An element that accepts a canvas needs visible material to
+                // modify. Opaque neutral gray makes paint and modulation steps
+                // readable without pretending to be caller artwork.
+                color: [65, 70, 80, 255],
+            },
+        });
+        recipe.wires.push(GeneratorGraphWire {
+            from_node: shape,
+            from_output: 0,
+            to_node: input,
+            to_input: 1,
+        });
+        recipe.wires.push(GeneratorGraphWire {
+            from_node: shader,
+            from_output: 0,
+            to_node: input,
+            to_input: 2,
+        });
+    }
+}
+
+fn preview_float(name: &str, width: usize, height: usize) -> f32 {
+    let short = width.min(height) as f32;
+    match name {
+        "cx" | "center x" | "center_x" | "x" => width as f32 * 0.5,
+        "cy" | "center y" | "center_y" | "y" => height as f32 * 0.5,
+        "size" => short * 0.8,
+        "radius" => short * 0.34,
+        "rx" | "ry" => short * 0.24,
+        "r" => short * 0.035,
+        "inset" => short * 0.08,
+        "ambient" => 0.65,
+        "strength" => 1.0,
+        "azimuth" => 315.0,
+        "opacity" => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn downsample_preview(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, usize, usize) {
+    const LIMIT: usize = 128;
+    let divisor = width.div_ceil(LIMIT).max(height.div_ceil(LIMIT)).max(1);
+    let out_width = width.div_ceil(divisor);
+    let out_height = height.div_ceil(divisor);
+    if divisor == 1 {
+        return (pixels.to_vec(), width, height);
+    }
+    let mut out = Vec::with_capacity(out_width * out_height * 4);
+    for y in 0..out_height {
+        for x in 0..out_width {
+            let source = ((y * divisor).min(height - 1) * width + (x * divisor).min(width - 1)) * 4;
+            out.extend_from_slice(&pixels[source..source + 4]);
+        }
+    }
+    (out, out_width, out_height)
 }
 
 /// Evaluate the graph to `w * h` RGBA8 pixels.
@@ -1330,6 +2152,29 @@ pub fn evaluate(snarl: &Snarl<Node>, w: usize, h: usize) -> Result<Vec<u8>, Stri
 
 /// Evaluate with current values for the graph's named parameter nodes.
 pub fn evaluate_with_values(
+    snarl: &Snarl<Node>,
+    w: usize,
+    h: usize,
+    knobs: &KnobValues,
+) -> Result<Vec<u8>, String> {
+    // Evaluation follows dependencies recursively. Real procedural assets can
+    // legitimately contain hundreds of nodes, while the default Windows main
+    // thread stack is small enough to overflow well before a graph is cyclic.
+    // Structural validation still rejects cycles; this stack is only headroom
+    // for deep, valid paint and shape compositions.
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("generator-graph".into())
+            .stack_size(32 * 1024 * 1024)
+            .spawn_scoped(scope, || evaluate_inner(snarl, w, h, knobs))
+            .map_err(|error| format!("could not start graph evaluator: {error}"))?;
+        worker
+            .join()
+            .map_err(|_| "graph evaluator panicked".to_owned())?
+    })
+}
+
+fn evaluate_inner(
     snarl: &Snarl<Node>,
     w: usize,
     h: usize,
@@ -1373,7 +2218,7 @@ fn validate(snarl: &Snarl<Node>) -> Result<NodeId, String> {
         let target = snarl
             .get_node(to.node)
             .ok_or_else(|| format!("wire ends at missing node {}", to.node.0))?;
-        let Some(output_socket) = source.output().filter(|_| from.output == 0) else {
+        let Some(output_socket) = source.output(from.output) else {
             return Err(format!("{} has no output {}", source.title(), from.output));
         };
         let Some(&input_socket) = target.inputs().get(to.input) else {
@@ -1515,6 +2360,37 @@ fn eval_node(
     cache: &mut HashMap<NodeId, Value>,
 ) -> Result<Value, String> {
     match &snarl[node_id] {
+        Node::ElementCall { .. } | Node::ElementInput { .. } | Node::ElementOutput { .. } => {
+            Err("element nodes must be expanded with their collection before evaluation".into())
+        }
+        Node::FloatAdd | Node::FloatSubtract | Node::FloatMultiply | Node::FloatDivide => {
+            let a = float_input(snarl, node_id, 0, 0.0, w, h, knobs, visiting, cache)?;
+            let fallback = if matches!(&snarl[node_id], Node::FloatDivide) {
+                1.0
+            } else {
+                0.0
+            };
+            let b = float_input(snarl, node_id, 1, fallback, w, h, knobs, visiting, cache)?;
+            let value = match &snarl[node_id] {
+                Node::FloatAdd => a + b,
+                Node::FloatSubtract => a - b,
+                Node::FloatMultiply => a * b,
+                Node::FloatDivide if b == 0.0 => {
+                    return Err("cannot divide a number by zero".into())
+                }
+                Node::FloatDivide => a / b,
+                _ => unreachable!(),
+            };
+            if value.is_finite() {
+                Ok(Value::Float(value))
+            } else {
+                Err("number arithmetic produced a non-finite value".into())
+            }
+        }
+        Node::FloatToField => {
+            let value = float_input(snarl, node_id, 0, 0.0, w, h, knobs, visiting, cache)?;
+            Ok(Value::Shape(artlib::fields::constant(value as f64)))
+        }
         Node::Float { value } => Ok(Value::Float(*value)),
         Node::Int { value } => Ok(Value::Int(*value)),
         Node::Bool { value } => Ok(Value::Bool(*value)),
@@ -2945,6 +3821,32 @@ mod tests {
     }
 
     #[test]
+    fn deeply_composed_valid_graph_evaluates_on_the_worker_stack() {
+        let mut snarl = Snarl::new();
+        let everywhere = snarl.insert_node(pos(), Node::Everywhere);
+        let solid = snarl.insert_node(
+            pos(),
+            Node::Solid {
+                color: [12, 34, 56, 255],
+            },
+        );
+        let mut canvas = None;
+        for _ in 0..600 {
+            let next = snarl.insert_node(pos(), paint());
+            if let Some(previous) = canvas {
+                wire(&mut snarl, previous, 0, next, 0);
+            }
+            wire(&mut snarl, everywhere, 0, next, 1);
+            wire(&mut snarl, solid, 0, next, 2);
+            canvas = Some(next);
+        }
+        let output = snarl.insert_node(pos(), Node::Output);
+        wire(&mut snarl, canvas.unwrap(), 0, output, 0);
+
+        assert_eq!(evaluate(&snarl, 1, 1).unwrap(), [12, 34, 56, 255]);
+    }
+
+    #[test]
     fn field_math_and_alpha_stamp_express_custom_shaders() {
         let mut snarl = Snarl::new();
         let x = snarl.insert_node(pos(), Node::FieldX);
@@ -2996,5 +3898,422 @@ mod tests {
             }],
         };
         assert!(from_recipe(&recipe).unwrap_err().contains("missing node"));
+    }
+
+    #[test]
+    fn reusable_element_expands_typed_inputs_and_multiple_outputs() {
+        let shape = GeneratorElementPort {
+            id: "shape".into(),
+            name: "shape".into(),
+            socket: Socket::Shape,
+        };
+        let original = GeneratorElementPort {
+            id: "original".into(),
+            name: "original".into(),
+            socket: Socket::Shape,
+        };
+        let grown = GeneratorElementPort {
+            id: "grown".into(),
+            name: "grown".into(),
+            socket: Socket::Shape,
+        };
+        let element = ElementResource {
+            id: "grow".into(),
+            name: "Grow".into(),
+            graph: GeneratorGraph {
+                nodes: vec![
+                    GeneratorGraphNode {
+                        id: 1,
+                        position: [0.0; 2],
+                        node: Node::ElementInput {
+                            port: shape.clone(),
+                        },
+                    },
+                    GeneratorGraphNode {
+                        id: 2,
+                        position: [0.0; 2],
+                        node: Node::Expand { radius: 2.0 },
+                    },
+                    GeneratorGraphNode {
+                        id: 3,
+                        position: [0.0; 2],
+                        node: Node::ElementOutput {
+                            port: original.clone(),
+                        },
+                    },
+                    GeneratorGraphNode {
+                        id: 4,
+                        position: [0.0; 2],
+                        node: Node::ElementOutput {
+                            port: grown.clone(),
+                        },
+                    },
+                ],
+                wires: vec![
+                    GeneratorGraphWire {
+                        from_node: 1,
+                        from_output: 0,
+                        to_node: 3,
+                        to_input: 0,
+                    },
+                    GeneratorGraphWire {
+                        from_node: 1,
+                        from_output: 0,
+                        to_node: 2,
+                        to_input: 0,
+                    },
+                    GeneratorGraphWire {
+                        from_node: 2,
+                        from_output: 0,
+                        to_node: 4,
+                        to_input: 0,
+                    },
+                ],
+            },
+        };
+        let recipe = GeneratorGraph {
+            nodes: vec![
+                GeneratorGraphNode {
+                    id: 10,
+                    position: [0.0; 2],
+                    node: Node::Disk {
+                        cx: 8.0,
+                        cy: 8.0,
+                        r: 2.0,
+                    },
+                },
+                GeneratorGraphNode {
+                    id: 11,
+                    position: [0.0; 2],
+                    node: Node::ElementCall {
+                        element: element.id.clone(),
+                        name: element.name.clone(),
+                        inputs: element.inputs(),
+                        outputs: element.outputs(),
+                    },
+                },
+                GeneratorGraphNode {
+                    id: 12,
+                    position: [0.0; 2],
+                    node: Node::Solid { color: [255; 4] },
+                },
+                GeneratorGraphNode {
+                    id: 13,
+                    position: [0.0; 2],
+                    node: paint(),
+                },
+                GeneratorGraphNode {
+                    id: 14,
+                    position: [0.0; 2],
+                    node: Node::Output,
+                },
+            ],
+            wires: vec![
+                GeneratorGraphWire {
+                    from_node: 10,
+                    from_output: 0,
+                    to_node: 11,
+                    to_input: 0,
+                },
+                GeneratorGraphWire {
+                    from_node: 11,
+                    from_output: 1,
+                    to_node: 13,
+                    to_input: 1,
+                },
+                GeneratorGraphWire {
+                    from_node: 12,
+                    from_output: 0,
+                    to_node: 13,
+                    to_input: 2,
+                },
+                GeneratorGraphWire {
+                    from_node: 13,
+                    from_output: 0,
+                    to_node: 14,
+                    to_input: 0,
+                },
+            ],
+        };
+
+        let expanded = expand_elements(&recipe, &[element]).unwrap();
+        assert!(!expanded.nodes.iter().any(|node| matches!(
+            node.node,
+            Node::ElementCall { .. } | Node::ElementInput { .. } | Node::ElementOutput { .. }
+        )));
+        let pixels = evaluate(&from_recipe(&expanded).unwrap(), 16, 16).unwrap();
+        assert_eq!(pixel(&pixels, 16, 8, 11), [255; 4]);
+    }
+
+    #[test]
+    fn recursive_elements_are_rejected() {
+        let output = GeneratorElementPort {
+            id: "out".into(),
+            name: "out".into(),
+            socket: Socket::Shape,
+        };
+        let element = ElementResource {
+            id: "loop".into(),
+            name: "Loop".into(),
+            graph: GeneratorGraph {
+                nodes: vec![
+                    GeneratorGraphNode {
+                        id: 1,
+                        position: [0.0; 2],
+                        node: Node::ElementCall {
+                            element: "loop".into(),
+                            name: "Loop".into(),
+                            inputs: vec![],
+                            outputs: vec![output.clone()],
+                        },
+                    },
+                    GeneratorGraphNode {
+                        id: 2,
+                        position: [0.0; 2],
+                        node: Node::ElementOutput { port: output },
+                    },
+                ],
+                wires: vec![GeneratorGraphWire {
+                    from_node: 1,
+                    from_output: 0,
+                    to_node: 2,
+                    to_input: 0,
+                }],
+            },
+        };
+        assert!(expand_elements(&element.graph, &[element.clone()])
+            .unwrap_err()
+            .contains("recursive element call"));
+    }
+
+    #[test]
+    fn element_port_edits_preserve_wires_by_stable_id() {
+        let port = |id: &str| GeneratorElementPort {
+            id: id.into(),
+            name: id.into(),
+            socket: Socket::Shape,
+        };
+        let old_inputs = vec![port("a"), port("b")];
+        let old_outputs = vec![port("first"), port("second")];
+        let mut recipe = GeneratorGraph {
+            nodes: vec![GeneratorGraphNode {
+                id: 2,
+                position: [0.0; 2],
+                node: Node::ElementCall {
+                    element: "pair".into(),
+                    name: "Pair".into(),
+                    inputs: old_inputs,
+                    outputs: old_outputs,
+                },
+            }],
+            wires: vec![
+                GeneratorGraphWire {
+                    from_node: 1,
+                    from_output: 0,
+                    to_node: 2,
+                    to_input: 1,
+                },
+                GeneratorGraphWire {
+                    from_node: 2,
+                    from_output: 0,
+                    to_node: 3,
+                    to_input: 0,
+                },
+            ],
+        };
+        let element = ElementResource {
+            id: "pair".into(),
+            name: "Renamed pair".into(),
+            graph: GeneratorGraph {
+                nodes: vec![
+                    GeneratorGraphNode {
+                        id: 10,
+                        position: [0.0; 2],
+                        node: Node::ElementInput { port: port("b") },
+                    },
+                    GeneratorGraphNode {
+                        id: 11,
+                        position: [0.0; 2],
+                        node: Node::ElementInput { port: port("a") },
+                    },
+                    GeneratorGraphNode {
+                        id: 12,
+                        position: [0.0; 2],
+                        node: Node::ElementOutput {
+                            port: port("second"),
+                        },
+                    },
+                    GeneratorGraphNode {
+                        id: 13,
+                        position: [0.0; 2],
+                        node: Node::ElementOutput {
+                            port: port("first"),
+                        },
+                    },
+                ],
+                wires: vec![],
+            },
+        };
+
+        refresh_element_calls(&mut recipe, &element);
+        assert_eq!(recipe.wires[0].to_input, 0);
+        assert_eq!(recipe.wires[1].from_output, 1);
+        let Node::ElementCall { name, inputs, .. } = &recipe.nodes[0].node else {
+            unreachable!()
+        };
+        assert_eq!(name, "Renamed pair");
+        assert_eq!(inputs[0].id, "b");
+    }
+
+    #[test]
+    fn shape_nodes_have_mask_previews() {
+        let mut graph = Snarl::new();
+        let disk = graph.insert_node(
+            pos(),
+            Node::Disk {
+                cx: 16.0,
+                cy: 16.0,
+                r: 8.0,
+            },
+        );
+
+        let (pixels, width, height) = preview_pixels(&graph, disk, &[], 32, 32).unwrap().unwrap();
+        assert_eq!((width, height), (32, 32));
+        assert_eq!(pixel(&pixels, width, 0, 0)[3], 0);
+        assert_eq!(pixel(&pixels, width, 16, 16), [235, 235, 235, 255]);
+    }
+
+    #[test]
+    fn element_definition_previews_use_meaningful_input_values() {
+        let port = |name: &str, socket| GeneratorElementPort {
+            id: name.into(),
+            name: name.into(),
+            socket,
+        };
+        let mut graph = Snarl::new();
+        let cx = graph.insert_node(
+            pos(),
+            Node::ElementInput {
+                port: port("cx", Socket::Float),
+            },
+        );
+        let cy = graph.insert_node(
+            pos(),
+            Node::ElementInput {
+                port: port("cy", Socket::Float),
+            },
+        );
+        let radius = graph.insert_node(
+            pos(),
+            Node::ElementInput {
+                port: port("radius", Socket::Float),
+            },
+        );
+        let disk = graph.insert_node(
+            pos(),
+            Node::Disk {
+                cx: 0.0,
+                cy: 0.0,
+                r: 0.0,
+            },
+        );
+        let output = graph.insert_node(
+            pos(),
+            Node::ElementOutput {
+                port: port("body", Socket::Shape),
+            },
+        );
+        wire(&mut graph, cx, 0, disk, 0);
+        wire(&mut graph, cy, 0, disk, 1);
+        wire(&mut graph, radius, 0, disk, 2);
+        wire(&mut graph, disk, 0, output, 0);
+
+        let (pixels, width, _) = preview_pixels(&graph, output, &[], 96, 96)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pixel(&pixels, width, 48, 48)[3], 255);
+        assert_eq!(pixel(&pixels, width, 0, 0)[3], 0);
+    }
+
+    #[test]
+    fn element_canvas_inputs_have_a_visible_preview_material() {
+        let mut graph = Snarl::new();
+        let canvas = graph.insert_node(
+            pos(),
+            Node::ElementInput {
+                port: GeneratorElementPort {
+                    id: "canvas".into(),
+                    name: "canvas".into(),
+                    socket: Socket::Canvas,
+                },
+            },
+        );
+
+        let (pixels, width, _) = preview_pixels(&graph, canvas, &[], 32, 32)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pixel(&pixels, width, 16, 16), [65, 70, 80, 255]);
+    }
+
+    #[test]
+    fn element_call_outputs_have_expanded_previews() {
+        let output_port = GeneratorElementPort {
+            id: "shape".into(),
+            name: "shape".into(),
+            socket: Socket::Shape,
+        };
+        let element = ElementResource {
+            id: "dot".into(),
+            name: "Dot".into(),
+            graph: GeneratorGraph {
+                nodes: vec![
+                    GeneratorGraphNode {
+                        id: 1,
+                        position: [0.0; 2],
+                        node: Node::Disk {
+                            cx: 8.0,
+                            cy: 8.0,
+                            r: 4.0,
+                        },
+                    },
+                    GeneratorGraphNode {
+                        id: 2,
+                        position: [0.0; 2],
+                        node: Node::ElementOutput {
+                            port: output_port.clone(),
+                        },
+                    },
+                ],
+                wires: vec![GeneratorGraphWire {
+                    from_node: 1,
+                    from_output: 0,
+                    to_node: 2,
+                    to_input: 0,
+                }],
+            },
+        };
+        let mut graph = Snarl::new();
+        let call = graph.insert_node(
+            pos(),
+            Node::ElementCall {
+                element: element.id.clone(),
+                name: element.name.clone(),
+                inputs: vec![],
+                outputs: vec![output_port],
+            },
+        );
+
+        let (pixels, width, _) = preview_pixels(&graph, call, &[element], 16, 16)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pixel(&pixels, width, 8, 8)[3], 255);
+    }
+
+    #[test]
+    fn previews_are_downsampled_to_a_bounded_texture() {
+        let pixels = vec![255; 256 * 64 * 4];
+        let (preview, width, height) = downsample_preview(&pixels, 256, 64);
+        assert_eq!((width, height), (128, 32));
+        assert_eq!(preview.len(), width * height * 4);
     }
 }

@@ -13,11 +13,14 @@ It organizes `.spriterize` projects without changing what a project means:
 
 ## Manifest model
 
-The version-2 manifest contains:
+The version-3 manifest contains:
 
 - `script_libraries`: reusable Rune helper functions.
 - `generators`: script or graph definitions. A script generator may include an
   ordered list of shared script libraries.
+- `elements`: user-authored reusable graph definitions with typed, named input
+  and output ports. Generator graphs store compact calls to these shared
+  definitions instead of copying their internal nodes.
 - `assets`: output id, generator reference, dimensions, relative output path,
   knob overrides, export options, and metadata.
 - `projects`: editable project id, display name, archive entry, output path,
@@ -26,8 +29,9 @@ The version-2 manifest contains:
 
 Asset metadata currently supports tags and Defold-style slice9 margins. A
 single generator can serve any number of outputs with different knob values.
-Graph resources are shared as complete generator templates; script libraries
-provide finer-grained reuse for text generators.
+Graph elements provide fine-grained visual reuse and may call other elements;
+recursive element calls are rejected. Script libraries provide the equivalent
+fine-grained reuse for text generators.
 
 ## Safety and reproducibility
 
@@ -55,6 +59,15 @@ browser, **New Project** creates a sized editable asset and loads it into the
 ordinary painting/generator editor. Select another project name to save the
 current project back into the archive and switch editing contexts.
 
+**New Element** creates an editable identity-shape element. In its graph,
+right-click and use **Element ports** to add typed inputs and outputs, then wire
+ordinary operations between them. Apply saves the shared definition. Element
+calls appear under **Reusable elements** in every graph editor opened from that
+collection and may expose multiple outputs. Port ids are stable: renaming or
+reordering a port preserves callers' wires, while deleting a port removes only
+the wires that used it. Applying an element refreshes embedded projects and
+reruns graph-generated layers in the active project.
+
 Use **File → Open Asset Collection…** to load a collection alongside the active
 project. Newly created and opened collections show their browser immediately;
 outputs can be exported individually or all at once. **File → Start Screen**
@@ -62,6 +75,9 @@ returns to the launcher without discarding the dormant project. Opening a
 collection does not replace or mutate the current raster project.
 
 Embedded projects retain their layers, frames, generator definitions, knob
-values, and other normal editor state. Saving, switching projects, exporting,
+values, and other normal editor state. A project containing element calls can
+retain and display its last pixels on its own, but rerunning those calls needs
+the owning collection. Saving, switching projects, exporting,
 returning to the start screen, and exiting all persist the active project back
-to its collection. Version-1 generator-only collections remain readable.
+to its collection. Version-1 generator-only and version-2 embedded-project
+collections remain readable.

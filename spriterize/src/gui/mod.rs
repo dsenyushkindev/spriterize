@@ -21,6 +21,7 @@ mod settings;
 mod status;
 mod toolbar;
 
+use crate::collection::ElementResource;
 use collection::CollectionWindow;
 pub use frames::FrameImage;
 use frames::FramesPanel;
@@ -41,6 +42,7 @@ pub struct CollectionSync {
     pub assets: Vec<String>,
     pub projects: Vec<(String, String)>,
     pub active_project: Option<String>,
+    pub elements: Vec<ElementResource>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +164,10 @@ impl Gui {
         self.collection_window.open();
     }
 
+    pub fn open_element_editor(&mut self, element: ElementResource) {
+        self.generator_window.open_element(element);
+    }
+
     /// Show the outcome of the last generator apply in the editor.
     pub fn set_generator_error(&mut self, error: Option<String>) {
         self.generator_window.set_error(error);
@@ -192,6 +198,17 @@ impl Gui {
             params.layers_adjustment.clone(),
             params.layers_generators.clone(),
             params.filters_enabled,
+            (
+                params.canvas_size.x.max(1) as usize,
+                params.canvas_size.y.max(1) as usize,
+            ),
+        );
+        self.generator_window.sync_context(
+            params
+                .collection
+                .as_ref()
+                .map(|collection| collection.elements.clone())
+                .unwrap_or_default(),
             (
                 params.canvas_size.x.max(1) as usize,
                 params.canvas_size.y.max(1) as usize,

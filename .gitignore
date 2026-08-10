@@ -2,3 +2,4 @@ target/
 unversioned/
 artlib_sample/
 artlib/tests/golden
+tools/

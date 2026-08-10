@@ -7,7 +7,10 @@
 
 use crate::wrapped_image::WrappedImage;
 use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
-use lapix::{Bitmap, ExportOptions, GenValue, GeneratorDefinition};
+use lapix::{
+    Bitmap, ExportOptions, GenValue, GeneratorDefinition, GeneratorElementPort, GeneratorGraph,
+    GeneratorGraphNode, GeneratorGraphWire, GeneratorNode, GeneratorSocket,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -17,7 +20,7 @@ use thiserror::Error;
 use zip::write::SimpleFileOptions;
 
 pub const COLLECTION_EXTENSION: &str = "spriterize-collection";
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 const MANIFEST_PATH: &str = "manifest.json";
 
 #[derive(Debug, Error)]
@@ -46,6 +49,10 @@ pub struct AssetCollection {
     pub script_libraries: Vec<ScriptLibrary>,
     #[serde(default)]
     pub generators: Vec<GeneratorResource>,
+    /// Reusable, user-authored graph subroutines shared by generators in this
+    /// collection.
+    #[serde(default)]
+    pub elements: Vec<ElementResource>,
     #[serde(default)]
     pub assets: Vec<AssetOutput>,
     /// Fully editable raster projects stored as ordinary project payloads in
@@ -61,6 +68,7 @@ impl AssetCollection {
             name: name.into(),
             script_libraries: Vec::new(),
             generators: Vec::new(),
+            elements: Vec::new(),
             assets: Vec::new(),
             projects: Vec::new(),
         }
@@ -87,6 +95,10 @@ impl AssetCollection {
             self.generators.iter().map(|resource| resource.id.as_str()),
             "generator",
         )?;
+        let elements = unique_ids(
+            self.elements.iter().map(|resource| resource.id.as_str()),
+            "element",
+        )?;
         let assets = unique_ids(self.assets.iter().map(|asset| asset.id.as_str()), "asset")?;
         let projects = unique_ids(
             self.projects.iter().map(|project| project.id.as_str()),
@@ -100,6 +112,11 @@ impl AssetCollection {
         if self.format_version < 2 && !self.projects.is_empty() {
             return Err(CollectionError::Invalid(
                 "format version 1 cannot contain embedded projects".into(),
+            ));
+        }
+        if self.format_version < 3 && !self.elements.is_empty() {
+            return Err(CollectionError::Invalid(
+                "collection format versions before 3 cannot contain graph elements".into(),
             ));
         }
 
@@ -126,6 +143,33 @@ impl AssetCollection {
                         generator.id
                     )));
                 }
+            }
+        }
+
+        for element in &self.elements {
+            element.validate()?;
+            validate_element_calls(&element.graph, &elements)?;
+            let expanded = crate::gui::graph::expand_elements(&element.graph, &self.elements)
+                .map_err(CollectionError::Invalid)?;
+            crate::gui::graph::from_recipe(&expanded).map_err(CollectionError::Invalid)?;
+        }
+        for generator in &self.generators {
+            if let GeneratorDefinition::Graph(graph) = &generator.definition {
+                validate_element_calls(graph, &elements)?;
+                if graph.nodes.iter().any(|node| {
+                    matches!(
+                        node.node,
+                        GeneratorNode::ElementInput { .. } | GeneratorNode::ElementOutput { .. }
+                    )
+                }) {
+                    return Err(CollectionError::Invalid(format!(
+                        "generator `{}` contains element boundary nodes",
+                        generator.id
+                    )));
+                }
+                let expanded = crate::gui::graph::expand_elements(graph, &self.elements)
+                    .map_err(CollectionError::Invalid)?;
+                crate::gui::graph::from_recipe(&expanded).map_err(CollectionError::Invalid)?;
             }
         }
 
@@ -190,12 +234,25 @@ impl AssetCollection {
                     project.id
                 )));
             }
-            lapix::State::<WrappedImage>::from_project_bytes(&project.data).map_err(|error| {
-                CollectionError::Invalid(format!(
-                    "project `{}` cannot be decoded: {error}",
-                    project.id
-                ))
-            })?;
+            let state = lapix::State::<WrappedImage>::from_project_bytes(&project.data).map_err(
+                |error| {
+                    CollectionError::Invalid(format!(
+                        "project `{}` cannot be decoded: {error}",
+                        project.id
+                    ))
+                },
+            )?;
+            for layer in 0..state.layers().count() {
+                if let Some(generator) = state.layers().get(layer).generator() {
+                    if let GeneratorDefinition::Graph(graph) = &generator.definition {
+                        validate_element_calls(graph, &elements)?;
+                        let expanded = crate::gui::graph::expand_elements(graph, &self.elements)
+                            .map_err(CollectionError::Invalid)?;
+                        crate::gui::graph::from_recipe(&expanded)
+                            .map_err(CollectionError::Invalid)?;
+                    }
+                }
+            }
             let path = safe_relative_path(&project.output)?;
             let key = path.to_string_lossy().replace('\\', "/").to_lowercase();
             if !output_paths.insert(key) {
@@ -270,6 +327,116 @@ impl AssetCollection {
             return Err(error);
         }
         Ok(id)
+    }
+
+    /// Add an editable identity-shape element and return its stable id.
+    pub fn add_element(&mut self, name: impl Into<String>) -> Result<String> {
+        let name = name.into();
+        let base = slug(&name);
+        let mut id = base.clone();
+        let mut suffix = 2;
+        while self.elements.iter().any(|element| element.id == id) {
+            id = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        let port = GeneratorElementPort {
+            id: "shape".into(),
+            name: "shape".into(),
+            socket: GeneratorSocket::Shape,
+        };
+        let previous_version = self.format_version;
+        self.elements.push(ElementResource {
+            id: id.clone(),
+            name,
+            graph: GeneratorGraph {
+                nodes: vec![
+                    GeneratorGraphNode {
+                        id: 1,
+                        position: [40.0, 100.0],
+                        node: GeneratorNode::ElementInput { port: port.clone() },
+                    },
+                    GeneratorGraphNode {
+                        id: 2,
+                        position: [360.0, 100.0],
+                        node: GeneratorNode::ElementOutput { port },
+                    },
+                ],
+                wires: vec![GeneratorGraphWire {
+                    from_node: 1,
+                    from_output: 0,
+                    to_node: 2,
+                    to_input: 0,
+                }],
+            },
+        });
+        self.format_version = FORMAT_VERSION;
+        if let Err(error) = self.validate() {
+            self.elements.pop();
+            self.format_version = previous_version;
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    /// Refresh all call nodes after an element's name or port list changes.
+    /// Stable port ids preserve surviving wires; wires to deleted ports are
+    /// removed deliberately.
+    pub fn refresh_element_references(&mut self, id: &str) -> Result<()> {
+        let Some(element) = self
+            .elements
+            .iter()
+            .find(|element| element.id == id)
+            .cloned()
+        else {
+            return Err(CollectionError::Invalid(format!("missing element `{id}`")));
+        };
+        for generator in &mut self.generators {
+            if let GeneratorDefinition::Graph(graph) = &mut generator.definition {
+                crate::gui::graph::refresh_element_calls(graph, &element);
+            }
+        }
+        for held in &mut self.elements {
+            crate::gui::graph::refresh_element_calls(&mut held.graph, &element);
+        }
+        for project in &mut self.projects {
+            let mut state = lapix::State::<WrappedImage>::from_project_bytes(&project.data)
+                .map_err(|error| {
+                    CollectionError::Invalid(format!(
+                        "project `{}` cannot be decoded: {error}",
+                        project.id
+                    ))
+                })?;
+            let generators: Vec<_> = (0..state.layers().count())
+                .filter_map(|layer| {
+                    state
+                        .layers()
+                        .get(layer)
+                        .generator()
+                        .cloned()
+                        .map(|generator| (layer, generator))
+                })
+                .collect();
+            for (layer, mut generator) in generators {
+                if let GeneratorDefinition::Graph(graph) = &mut generator.definition {
+                    crate::gui::graph::refresh_element_calls(graph, &element);
+                    state
+                        .set_layer_generator(layer, Some(generator), None)
+                        .map_err(|error| {
+                            CollectionError::Invalid(format!(
+                                "project `{}` could not refresh element calls: {error}",
+                                project.id
+                            ))
+                        })?;
+                }
+            }
+            project.data = state.project_bytes().map_err(|error| {
+                CollectionError::Invalid(format!(
+                    "project `{}` could not be encoded: {error}",
+                    project.id
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     pub fn export_all(&self, directory: impl AsRef<Path>) -> Result<ExportReport> {
@@ -387,7 +554,9 @@ impl AssetCollection {
                 .map_err(failure)
             }
             GeneratorDefinition::Graph(recipe) => {
-                let graph = crate::gui::graph::from_recipe(recipe).map_err(failure)?;
+                let expanded =
+                    crate::gui::graph::expand_elements(recipe, &self.elements).map_err(failure)?;
+                let graph = crate::gui::graph::from_recipe(&expanded).map_err(failure)?;
                 crate::gui::graph::evaluate_with_values(
                     &graph,
                     asset.width as usize,
@@ -413,6 +582,54 @@ pub struct GeneratorResource {
     /// Ordered helper libraries prepended to a script before compilation.
     #[serde(default)]
     pub libraries: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElementResource {
+    pub id: String,
+    pub name: String,
+    pub graph: GeneratorGraph,
+}
+
+impl ElementResource {
+    pub fn inputs(&self) -> Vec<GeneratorElementPort> {
+        element_ports(&self.graph, true)
+    }
+
+    pub fn outputs(&self) -> Vec<GeneratorElementPort> {
+        element_ports(&self.graph, false)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(CollectionError::Invalid(format!(
+                "element `{}` has an empty name",
+                self.id
+            )));
+        }
+        let inputs = self.inputs();
+        let outputs = self.outputs();
+        if outputs.is_empty() {
+            return Err(CollectionError::Invalid(format!(
+                "element `{}` has no outputs",
+                self.id
+            )));
+        }
+        validate_ports(&self.id, "input", &inputs)?;
+        validate_ports(&self.id, "output", &outputs)?;
+        if self
+            .graph
+            .nodes
+            .iter()
+            .any(|node| matches!(node.node, GeneratorNode::Output))
+        {
+            return Err(CollectionError::Invalid(format!(
+                "element `{}` contains a generator Output node",
+                self.id
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -470,6 +687,43 @@ fn unique_ids<'a>(ids: impl IntoIterator<Item = &'a str>, kind: &str) -> Result<
         }
     }
     Ok(found)
+}
+
+fn element_ports(graph: &GeneratorGraph, inputs: bool) -> Vec<GeneratorElementPort> {
+    graph
+        .nodes
+        .iter()
+        .filter_map(|node| match (&node.node, inputs) {
+            (GeneratorNode::ElementInput { port }, true)
+            | (GeneratorNode::ElementOutput { port }, false) => Some(port.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn validate_ports(element: &str, kind: &str, ports: &[GeneratorElementPort]) -> Result<()> {
+    let mut ids = HashSet::new();
+    for port in ports {
+        if port.id.trim().is_empty() || port.name.trim().is_empty() || !ids.insert(&port.id) {
+            return Err(CollectionError::Invalid(format!(
+                "element `{element}` has an empty or duplicate {kind} port"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_element_calls(graph: &GeneratorGraph, elements: &HashSet<&str>) -> Result<()> {
+    for node in &graph.nodes {
+        if let GeneratorNode::ElementCall { element, .. } = &node.node {
+            if !elements.contains(element.as_str()) {
+                return Err(CollectionError::Invalid(format!(
+                    "graph references missing element `{element}`"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn slug(name: &str) -> String {
@@ -698,5 +952,20 @@ mod tests {
     fn malformed_embedded_projects_are_rejected() {
         let mut collection = AssetCollection::new("broken");
         assert!(collection.add_project("Broken", vec![1, 2, 3, 4]).is_err());
+    }
+
+    #[test]
+    fn authored_elements_round_trip_in_the_collection_manifest() {
+        let mut collection = AssetCollection::new("elements");
+        let id = collection.add_element("Chamfered panel").unwrap();
+        assert_eq!(id, "chamfered-panel");
+        assert_eq!(collection.elements[0].inputs()[0].id, "shape");
+
+        let dir = temp_dir("element-roundtrip");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("elements.{COLLECTION_EXTENSION}"));
+        collection.save(&path).unwrap();
+        assert_eq!(AssetCollection::load(&path).unwrap(), collection);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -43,6 +43,27 @@ pub struct GeneratorGraphWire {
     pub to_input: usize,
 }
 
+/// Serializable value type carried by a graph or reusable-element port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GeneratorSocket {
+    Float,
+    Int,
+    Color,
+    Bool,
+    Shape,
+    Grid,
+    Shader,
+    Canvas,
+}
+
+/// A stable, named port on a reusable graph element.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratorElementPort {
+    pub id: String,
+    pub name: String,
+    pub socket: GeneratorSocket,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GeneratorNoiseSource {
     Value,
@@ -385,6 +406,28 @@ pub enum GeneratorNode {
     Fill,
     Modulate,
     Output,
+    /// An invocation of a collection-owned reusable graph element. Ports are
+    /// snapshotted so the graph stays readable and type-checkable even when
+    /// viewed outside its collection.
+    ElementCall {
+        element: String,
+        name: String,
+        inputs: Vec<GeneratorElementPort>,
+        outputs: Vec<GeneratorElementPort>,
+    },
+    /// A public input inside an element definition.
+    ElementInput {
+        port: GeneratorElementPort,
+    },
+    /// A public output inside an element definition.
+    ElementOutput {
+        port: GeneratorElementPort,
+    },
+    FloatAdd,
+    FloatSubtract,
+    FloatMultiply,
+    FloatDivide,
+    FloatToField,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

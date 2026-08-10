@@ -124,6 +124,13 @@ pub enum UiEvent {
         width: u16,
         height: u16,
     },
+    CreateCollectionElement(String),
+    EditCollectionElement(String),
+    SetCollectionElement {
+        id: String,
+        name: String,
+        graph: lapix::GeneratorGraph,
+    },
     SwitchCollectionProject(String),
     OpenDocument,
     ShowLauncher,
@@ -282,6 +289,7 @@ impl<'a> From<&'a UiState> for GuiSyncParams {
                         .map(|project| (project.id.clone(), project.name.clone()))
                         .collect(),
                     active_project: state.active_collection_project.clone(),
+                    elements: collection.elements.clone(),
                 }),
             show_launcher: state.show_launcher,
             new_project_requested: state.new_project_requested,
@@ -781,6 +789,99 @@ impl UiState {
         self.switch_collection_project(&id)
     }
 
+    fn create_collection_element(&mut self, name: String) -> Result<()> {
+        self.persist_active_collection_project()?;
+        let Some((path, collection)) = &mut self.current_collection else {
+            return Ok(());
+        };
+        let id = collection.add_element(name)?;
+        let element = collection
+            .elements
+            .iter()
+            .find(|element| element.id == id)
+            .cloned()
+            .expect("new element exists");
+        collection.save(&*path)?;
+        self.gui.open_element_editor(element);
+        Ok(())
+    }
+
+    fn edit_collection_element(&mut self, id: &str) {
+        if let Some(element) = self
+            .current_collection
+            .as_ref()
+            .and_then(|(_, collection)| collection.elements.iter().find(|element| element.id == id))
+            .cloned()
+        {
+            self.gui.open_element_editor(element);
+        }
+    }
+
+    fn set_collection_element(
+        &mut self,
+        id: &str,
+        name: String,
+        graph: lapix::GeneratorGraph,
+    ) -> Result<()> {
+        self.persist_active_collection_project()?;
+        let Some((path, collection)) = &mut self.current_collection else {
+            return Ok(());
+        };
+        let Some(index) = collection
+            .elements
+            .iter()
+            .position(|element| element.id == id)
+        else {
+            return Ok(());
+        };
+        let previous = collection.clone();
+        collection.elements[index].name = name;
+        collection.elements[index].graph = graph;
+        collection.format_version = crate::collection::FORMAT_VERSION;
+        let validation = collection
+            .refresh_element_references(id)
+            .and_then(|_| collection.validate());
+        if let Err(error) = validation {
+            *collection = previous;
+            self.gui.set_generator_error(Some(error.to_string()));
+            return Ok(());
+        }
+        collection.save(&*path)?;
+        let active_data = self
+            .active_collection_project
+            .as_deref()
+            .and_then(|active| {
+                collection
+                    .projects
+                    .iter()
+                    .find(|project| project.id == active)
+                    .map(|project| project.data.clone())
+            });
+        if let Some(data) = active_data {
+            let effect = self.inner.load_project_bytes(&data)?;
+            self.apply_canvas_effect(effect);
+            let generators: Vec<_> = (0..self.inner.layers().count())
+                .filter_map(|layer| {
+                    self.inner
+                        .layers()
+                        .get(layer)
+                        .generator()
+                        .cloned()
+                        .filter(|generator| {
+                            matches!(generator.definition, GeneratorDefinition::Graph(_))
+                        })
+                        .map(|generator| (layer, generator))
+                })
+                .collect();
+            for (layer, generator) in generators {
+                self.apply_generator(layer, generator)?;
+            }
+            self.persist_active_collection_project()?;
+        }
+        self.gui.set_generator_error(None);
+        Ok(())
+    }
+
     /// Save the editor state back into its project entry and rewrite the
     /// collection from the in-memory archive model.
     fn persist_active_collection_project(&mut self) -> Result<()> {
@@ -1033,14 +1134,21 @@ impl UiState {
                     .map(|generated| generated.pixels)
             }
             GeneratorDefinition::Graph(recipe) => {
-                crate::gui::graph::from_recipe(recipe).and_then(|graph| {
-                    crate::gui::graph::evaluate_with_values(
-                        &graph,
-                        w,
-                        h,
-                        &graph_knob_values(&generator),
-                    )
-                })
+                let elements = self
+                    .current_collection
+                    .as_ref()
+                    .map(|(_, collection)| collection.elements.as_slice())
+                    .unwrap_or_default();
+                crate::gui::graph::expand_elements(recipe, elements)
+                    .and_then(|expanded| crate::gui::graph::from_recipe(&expanded))
+                    .and_then(|graph| {
+                        crate::gui::graph::evaluate_with_values(
+                            &graph,
+                            w,
+                            h,
+                            &graph_knob_values(&generator),
+                        )
+                    })
             }
         };
 
@@ -1251,6 +1359,11 @@ impl UiState {
                 width,
                 height,
             } => self.create_collection_project(name, width, height)?,
+            UiEvent::CreateCollectionElement(name) => self.create_collection_element(name)?,
+            UiEvent::EditCollectionElement(id) => self.edit_collection_element(&id),
+            UiEvent::SetCollectionElement { id, name, graph } => {
+                self.set_collection_element(&id, name, graph)?
+            }
             UiEvent::SwitchCollectionProject(id) => self.switch_collection_project(&id)?,
             UiEvent::OpenDocument => {
                 let near = self

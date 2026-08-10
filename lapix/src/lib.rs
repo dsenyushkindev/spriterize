@@ -30,8 +30,9 @@ pub use export::{ExportOptions, Scale};
 pub use filter::Filter;
 pub use floating::FreeImage;
 pub use generator::{
-    GenValue, Generator, GeneratorDefinition, GeneratorGraph, GeneratorGraphNode,
-    GeneratorGraphWire, GeneratorNode, GeneratorNoiseSource, GeneratorWorleyFeature,
+    GenValue, Generator, GeneratorDefinition, GeneratorElementPort, GeneratorGraph,
+    GeneratorGraphNode, GeneratorGraphWire, GeneratorNode, GeneratorNoiseSource, GeneratorSocket,
+    GeneratorWorleyFeature,
 };
 pub use layer::{Layer, Layers, Rendered};
 use palette::Palette;

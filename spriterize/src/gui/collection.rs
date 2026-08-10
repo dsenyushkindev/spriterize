@@ -7,10 +7,13 @@ pub struct CollectionWindow {
     assets: Vec<(String, bool)>,
     projects: Vec<(String, String, bool)>,
     active_project: Option<String>,
+    elements: Vec<(String, String)>,
     adding_project: bool,
+    adding_element: bool,
     new_name: String,
     new_width: String,
     new_height: String,
+    new_element_name: String,
 }
 
 impl CollectionWindow {
@@ -21,10 +24,13 @@ impl CollectionWindow {
             assets: Vec::new(),
             projects: Vec::new(),
             active_project: None,
+            elements: Vec::new(),
             adding_project: false,
+            adding_element: false,
             new_name: "New Asset".into(),
             new_width: "64".into(),
             new_height: "64".into(),
+            new_element_name: "New Element".into(),
         }
     }
 
@@ -35,10 +41,16 @@ impl CollectionWindow {
             self.assets.clear();
             self.projects.clear();
             self.active_project = None;
+            self.elements.clear();
             return;
         };
         self.name = collection.name;
         self.active_project = collection.active_project;
+        self.elements = collection
+            .elements
+            .iter()
+            .map(|element| (element.id.clone(), element.name.clone()))
+            .collect();
         sync_checks(&mut self.assets, collection.assets);
 
         let old = std::mem::take(&mut self.projects);
@@ -72,6 +84,9 @@ impl CollectionWindow {
                 ui.horizontal(|ui| {
                     if ui.button("+ New Project").clicked() {
                         self.adding_project = true;
+                    }
+                    if ui.button("+ New Element").clicked() {
+                        self.adding_element = true;
                     }
                     if ui.button("Select all").clicked() {
                         set_all(&mut self.assets, true);
@@ -137,6 +152,36 @@ impl CollectionWindow {
                     });
                 }
 
+                if self.adding_element {
+                    ui.group(|ui| {
+                        ui.label("New reusable graph element");
+                        ui.horizontal(|ui| {
+                            ui.label("Name");
+                            ui.text_edit_singleline(&mut self.new_element_name);
+                        });
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    !self.new_element_name.trim().is_empty(),
+                                    egui::Button::new("Create and edit"),
+                                )
+                                .clicked()
+                            {
+                                effects.push(
+                                    UiEvent::CreateCollectionElement(
+                                        self.new_element_name.trim().to_owned(),
+                                    )
+                                    .into(),
+                                );
+                                self.adding_element = false;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.adding_element = false;
+                            }
+                        });
+                    });
+                }
+
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .max_height(420.0)
@@ -157,6 +202,17 @@ impl CollectionWindow {
                                     ui.weak("editing");
                                 }
                             });
+                        }
+
+                        ui.add_space(12.0);
+                        ui.heading("Reusable elements");
+                        if self.elements.is_empty() {
+                            ui.weak("No shared elements yet.");
+                        }
+                        for (id, name) in &self.elements {
+                            if ui.button(name).clicked() {
+                                effects.push(UiEvent::EditCollectionElement(id.clone()).into());
+                            }
                         }
 
                         if !self.assets.is_empty() {
